@@ -63,23 +63,147 @@ enum HoverSpeed: String, CaseIterable, Identifiable {
     }
     var name: String {
         switch self {
-        case .instant: "즉시"
-        case .fast: "빠르게"
-        case .standard: "기본"
-        case .relaxed: "여유 있게"
-        case .slow: "느리게"
+        case .instant: L("즉시", "Instant")
+        case .fast: L("빠르게", "Fast")
+        case .standard: L("기본", "Default")
+        case .relaxed: L("여유 있게", "Relaxed")
+        case .slow: L("느리게", "Slow")
         }
     }
     var label: String { name + " · " + (delay * 1000).formatted(.number.precision(.fractionLength(0))) + "ms" }
 }
 
+enum AttentionReason: Equatable {
+    case finished, bell, exited
+    /// Which one to show when several sessions want attention: a question beats a result.
+    var priority: Int {
+        switch self {
+        case .bell: 3
+        case .finished: 2
+        case .exited: 1
+        }
+    }
+    var message: String {
+        switch self {
+        case .finished: L("작업을 마쳤어요", "finished")
+        case .bell: L("확인이 필요해요", "needs you")
+        case .exited: L("세션이 종료됐어요", "session ended")
+        }
+    }
+}
+
+enum Reorder {
+    /// Moves the element with `id` to where `target` is, the way a dragged tab settles:
+    /// dragging right lands after the target, dragging left lands before it.
+    static func move<T, ID: Equatable>(_ items: inout [T], id: ID, onto target: ID, key: (T) -> ID) {
+        guard let from = items.firstIndex(where: { key($0) == id }),
+              let to = items.firstIndex(where: { key($0) == target }), from != to else { return }
+        let item = items.remove(at: from)
+        items.insert(item, at: to)
+    }
+}
+
+struct SavedSession: Codable, Equatable {
+    let kind: AgentKind
+    let path: String
+}
+
+enum SessionRestore {
+    /// Flags that reopen the most recent conversation in the working directory.
+    static func resumeArguments(for kind: AgentKind) -> [String] {
+        switch kind {
+        case .claude: ["--continue"]
+        case .codex: ["resume", "--last"]
+        case .shell, .gemini: []
+        }
+    }
+    /// Starts an interactive session that begins with `prompt`. A leading space keeps a prompt
+    /// such as "-v 옵션 설명" from being parsed as a flag.
+    static func initialPromptArguments(for kind: AgentKind, prompt: String) -> [String] {
+        let text = prompt.hasPrefix("-") ? " " + prompt : prompt
+        switch kind {
+        case .claude, .codex: return [text]
+        case .gemini: return ["--prompt-interactive", text]
+        case .shell: return []
+        }
+    }
+    /// Both CLIs only continue a folder's *latest* conversation, so only the first tab per
+    /// agent and folder resumes; duplicates start fresh instead of opening the same chat twice.
+    static func plan(_ saved: [SavedSession]) -> [(session: SavedSession, resume: Bool)] {
+        var seen = Set<String>()
+        return saved.map { item in
+            let key = item.kind.rawValue + "\u{0}" + Workspaces.normalize(item.path)
+            let first = seen.insert(key).inserted
+            return (item, first && !resumeArguments(for: item.kind).isEmpty)
+        }
+    }
+}
+
+/// The single thing the closed notch shows on the right, most important first.
+enum NotchStatus: Equatable {
+    case attention(AttentionReason)
+    case working(since: Date)
+    case lowQuota(AgentKind, remaining: Double)
+    case sessions(Int)
+    case empty
+
+    static let lowQuotaThreshold: Double = 20
+
+    static func resolve(attention: [AttentionReason], workingSince: [Date],
+                        quotas: [(agent: AgentKind, remaining: Double)], running: Int) -> NotchStatus {
+        if let top = attention.max(by: { $0.priority < $1.priority }) { return .attention(top) }
+        if let oldest = workingSince.min() { return .working(since: oldest) }
+        if let low = quotas.filter({ $0.remaining <= lowQuotaThreshold }).min(by: { $0.remaining < $1.remaining }) {
+            return .lowQuota(low.agent, remaining: low.remaining)
+        }
+        return running > 0 ? .sessions(running) : .empty
+    }
+    /// "2:31" under an hour, "1h04" after that; fits the narrow notch wing.
+    static func elapsed(since start: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        if seconds < 3600 { return String(format: "%d:%02d", seconds / 60, seconds % 60) }
+        return String(format: "%dh%02d", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
+
+struct NotchBanner: Equatable {
+    let sessionID: UUID
+    let kind: AgentKind
+    let reason: AttentionReason
+    let folder: String
+    let shownAt: Date
+}
+
+/// Infers "working" and "just finished" from output timing. Agents stream spinners and text
+/// while they work and go quiet when they wait for the user.
+struct ActivityTracker {
+    static let idleAfter: TimeInterval = 2.5   // silence that means the program stopped
+    static let minimumWork: TimeInterval = 4   // shorter bursts (echo, banners) are not "work"
+    private(set) var lastOutput: Date?
+    private(set) var busySince: Date?
+
+    mutating func output(at date: Date) {
+        if let lastOutput, date.timeIntervalSince(lastOutput) < Self.idleAfter {} else { busySince = date }
+        lastOutput = date
+    }
+    func isWorking(now: Date) -> Bool {
+        lastOutput.map { now.timeIntervalSince($0) < Self.idleAfter } ?? false
+    }
+    /// True exactly once when a long enough burst of output has ended.
+    mutating func finishedWork(now: Date) -> Bool {
+        guard let lastOutput, let start = busySince, now.timeIntervalSince(lastOutput) >= Self.idleAfter else { return false }
+        busySince = nil
+        return lastOutput.timeIntervalSince(start) >= Self.minimumWork
+    }
+}
+
 enum UsageAge {
     static func label(since date: Date, now: Date = Date()) -> String {
         let minutes = Int(now.timeIntervalSince(date) / 60)
-        if minutes < 1 { return "방금 전" }
-        if minutes < 60 { return "\(minutes)분 전" }
-        if minutes < 1440 { return "\(minutes / 60)시간 전" }
-        return "\(minutes / 1440)일 전"
+        if minutes < 1 { return L("방금 전", "just now") }
+        if minutes < 60 { return L("\(minutes)분 전", "\(minutes)m ago") }
+        if minutes < 1440 { return L("\(minutes / 60)시간 전", "\(minutes / 60)h ago") }
+        return L("\(minutes / 1440)일 전", "\(minutes / 1440)d ago")
     }
 }
 
@@ -117,18 +241,18 @@ struct UsageWindow: Equatable, Identifiable {
     let resetsAt: Date?
     var remaining: Double { min(100, max(0, 100 - usedPercent)) }
     var title: String {
-        guard let minutes = durationMinutes else { return id == "primary" ? "현재 한도" : "추가 한도" }
-        if minutes == 10080 { return "주간 한도" }
-        if minutes % 60 == 0 { return "\(minutes / 60)시간 한도" }
-        return "\(minutes)분 한도"
+        guard let minutes = durationMinutes else { return id == "primary" ? L("현재 한도", "Current limit") : L("추가 한도", "Extra limit") }
+        if minutes == 10080 { return L("주간 한도", "Weekly") }
+        if minutes % 60 == 0 { return L("\(minutes / 60)시간 한도", "\(minutes / 60)-hour") }
+        return L("\(minutes)분 한도", "\(minutes)-minute")
     }
     func resetLabel(now: Date = Date()) -> String {
-        guard let reset = resetsAt else { return "초기화 시간 없음" }
+        guard let reset = resetsAt else { return L("초기화 시간 없음", "No reset time") }
         let minutes = max(0, Int(ceil(reset.timeIntervalSince(now) / 60)))
-        if minutes == 0 { return "갱신 대기" }
-        if minutes >= 1440 { return "\(minutes / 1440)일 \((minutes % 1440) / 60)시간 후 초기화" }
-        if minutes >= 60 { return "\(minutes / 60)시간 \(minutes % 60)분 후 초기화" }
-        return "\(minutes)분 후 초기화"
+        if minutes == 0 { return L("갱신 대기", "Resetting") }
+        if minutes >= 1440 { return L("\(minutes / 1440)일 \((minutes % 1440) / 60)시간 후 초기화", "Resets in \(minutes / 1440)d \((minutes % 1440) / 60)h") }
+        if minutes >= 60 { return L("\(minutes / 60)시간 \(minutes % 60)분 후 초기화", "Resets in \(minutes / 60)h \(minutes % 60)m") }
+        return L("\(minutes)분 후 초기화", "Resets in \(minutes)m")
     }
 }
 

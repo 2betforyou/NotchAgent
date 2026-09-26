@@ -220,4 +220,35 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(a.ended && b.ended)
         for shell in shells { XCTAssertTrue(waitUntil(2) { kill(shell, 0) != 0 }) }
     }
+    // MARK: Close confirmation only when work would be interrupted
+
+    func testIdleShellClosesWithoutAskingButRunningCommandAsks() throws {
+        let shell = TerminalSession(kind: .shell, directory: directory, executable: "/bin/zsh", fontSize: 13)
+        sessions.append(shell)
+        shell.start()
+        let model = AppModel()
+        model.sessions = [shell]
+        var asked = 0
+        model.runAlert = { _ in asked += 1; return .alertFirstButtonReturn } // "cancel" if asked
+        XCTAssertTrue(waitUntil(10) { !shell.isBusy && shell.terminal.getTerminal().buffer.x > 0 }, "prompt drawn")
+        shell.terminal.send(txt: "sleep 5\r")
+        XCTAssertTrue(waitUntil(5) { shell.isBusy }, "a running command counts as work")
+        model.closeSession(shell)
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(model.sessions.count, 1, "cancelled, so the session stays")
+        shell.terminal.send(data: [3]) // Ctrl-C back to the prompt
+        XCTAssertTrue(waitUntil(5) { !shell.isBusy })
+        model.closeSession(shell)
+        XCTAssertEqual(asked, 1, "an idle prompt closes without a question")
+        XCTAssertTrue(model.sessions.isEmpty)
+    }
+    func testAgentIsBusyOnlyWhileStreaming() throws {
+        let agent = try session(running: "while true; do sleep 1; done") // an idle agent waiting for input
+        XCTAssertFalse(agent.isBusy)
+        agent.recordOutput(at: Date())
+        _ = agent.tick(now: Date(), visible: true)
+        XCTAssertTrue(agent.isBusy)
+        _ = agent.tick(now: Date().addingTimeInterval(5), visible: true)
+        XCTAssertFalse(agent.isBusy)
+    }
 }

@@ -11,6 +11,11 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 <key>LSUIElement</key><true/>
+<key>UTExportedTypeDeclarations</key><array><dict>
+  <key>UTTypeIdentifier</key><string>app.notchagent.reorder</string>
+  <key>UTTypeDescription</key><string>NotchAgent tab or folder being reordered</string>
+  <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+</dict></array>
 <key>LSRequiresNativeExecution</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>

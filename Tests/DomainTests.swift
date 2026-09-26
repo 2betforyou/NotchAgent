@@ -2,6 +2,7 @@ import XCTest
 @testable import NotchAgent
 
 final class DomainTests: XCTestCase {
+    override func setUp() { AppLanguage.current = .korean }
     func testShellQuote() {
         XCTAssertEqual(ShellSafety.quote("/tmp/my app"), "'/tmp/my app'")
         XCTAssertEqual(ShellSafety.quote("a'b;$(id)"), "'a'\\''b;$(id)'")

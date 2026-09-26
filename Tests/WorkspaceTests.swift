@@ -53,6 +53,8 @@ final class WorkspaceTests: XCTestCase {
         }
         let a1 = session(a), b1 = session(b), a2 = session(a)
         model.sessions = [a1, b1, a2]
+        b1.start() // a real shell, so the folder has a running session
+        defer { TerminalSession.stopAll([a1, b1, a2]) }
         model.activateWorkspace(a)
         XCTAssertEqual(model.visibleSessions.map(\.id), [a1.id, a2.id])
         XCTAssertEqual(model.selectedID, a2.id)
@@ -73,8 +75,40 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(model.workspacePath, a)
 
         model.runAlert = { _ in .alertFirstButtonReturn } // cancel keeps everything
-        model.workspaces.append(SavedWorkspace(path: b)); model.sessions.append(b1)
+        let b2 = session(b); b2.start()
+        defer { b2.stop() }
+        model.workspaces.append(SavedWorkspace(path: b)); model.sessions.append(b2)
         model.removeWorkspace(b)
         XCTAssertEqual(model.workspaces.count, 2)
+        XCTAssertTrue(b2.isRunning)
+
+        // A folder whose tabs were never opened is removed without asking.
+        asked = false
+        model.runAlert = { _ in asked = true; return .alertFirstButtonReturn }
+        let idle = session(b); model.sessions = [a1, a2, idle]
+        model.removeWorkspace(b)
+        XCTAssertFalse(asked)
+        XCTAssertEqual(model.workspaces.map(\.path), [a])
+    }
+    /// Regression: the preview kept showing the app-wide count after switching folders.
+    @MainActor func testPreviewTextFollowsTheCurrentFolder() {
+        AppLanguage.current = .korean
+        let d = UserDefaults.standard
+        let saved = (d.object(forKey: "workspace"), d.object(forKey: "workspaces"))
+        defer { d.set(saved.0, forKey: "workspace"); d.set(saved.1, forKey: "workspaces") }
+        let a = "/tmp/NotchAgentA", b = "/tmp/NotchAgentB"
+        let model = AppModel()
+        model.workspaces = [SavedWorkspace(path: a), SavedWorkspace(path: b)]
+        let a1 = TerminalSession(kind: .codex, directory: URL(fileURLWithPath: a), executable: "/bin/zsh", fontSize: 13)
+        let a2 = TerminalSession(kind: .shell, directory: URL(fileURLWithPath: a), executable: "/bin/zsh", fontSize: 13)
+        model.sessions = [a1, a2]
+        a1.start(); a2.start()
+        defer { TerminalSession.stopAll([a1, a2]) }
+        model.activateWorkspace(a)
+        XCTAssertEqual(model.previewHeadline, "2개의 세션이 열려 있어요.")
+        XCTAssertEqual(model.previewSubtitle, "Terminal · NotchAgentA")
+        model.activateWorkspace(b)
+        XCTAssertEqual(model.previewHeadline, "작업은 가까이. 화면은 여유롭게.")
+        XCTAssertEqual(model.previewSubtitle, "다른 폴더에서 2개 실행 중")
     }
 }

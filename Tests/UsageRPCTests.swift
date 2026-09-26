@@ -6,6 +6,7 @@ import XCTest
 final class UsageRPCTests: XCTestCase {
     private var directory: URL!
     override func setUp() async throws {
+        AppLanguage.current = .korean
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("NotchAgentUsage-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }

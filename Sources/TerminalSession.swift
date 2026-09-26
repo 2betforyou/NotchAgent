@@ -5,7 +5,12 @@ import SwiftUI
 
 class AgentTerminalView: LocalProcessTerminalView {
     var onActivity: (() -> Void)?
-    var onCollapse: (() -> Void)?
+    var onBell: (() -> Void)?
+    // BEL is how CLIs ask for attention (approval prompts, finished turns).
+    override func bell(source: Terminal) {
+        super.bell(source: source)
+        onBell?()
+    }
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)
         // Echo moves the caret; keep the composing syllable next to it instead of over the
@@ -21,13 +26,6 @@ class AgentTerminalView: LocalProcessTerminalView {
     }
     // Remote programs must not overwrite the system clipboard via OSC 52.
     override func clipboardCopy(source: TerminalView, content: Data) {}
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           event.charactersIgnoringModifiers == "w" {
-            onCollapse?(); return true
-        }
-        return super.performKeyEquivalent(with: event)
-    }
 
     // MARK: Input-method composition (Korean, Japanese, Chinese)
     // SwiftTerm ignores marked text, so an in-progress syllable was invisible until committed.
@@ -109,9 +107,16 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     private(set) var directory: URL
     private(set) var exitCode: Int32?
     private(set) var ended = false
-    private(set) var lastOutputAt: Date?
+    /// Output is streaming right now (an agent thinking or a command running).
+    private(set) var isWorking = false
+    /// Something happened while the user was not looking: work finished, a bell, or exit.
+    private(set) var attention: AttentionReason?
+    @ObservationIgnored private var tracker = ActivityTracker()
+    @ObservationIgnored private var rang = false
+    @ObservationIgnored private var exitNoticed = false
     @ObservationIgnored let terminal: AgentTerminalView
-    @ObservationIgnored private var started = false
+    /// Restored tabs stay unstarted until the user opens them.
+    private(set) var started = false
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private let executable: String
     @ObservationIgnored private let arguments: [String]
@@ -132,11 +137,9 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         terminal.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         // SwiftTerm keeps 500 lines by default; agent transcripts are much longer.
         terminal.changeScrollback(Self.scrollbackLines)
-        terminal.onActivity = { [weak self] in
-            // Throttle UI invalidation while the terminal renders at its own cadence.
-            guard let self, Date().timeIntervalSince(self.lastOutputAt ?? .distantPast) > 1 else { return }
-            self.lastOutputAt = Date()
-        }
+        // Recorded without touching observed state; the model samples it once per second.
+        terminal.onActivity = { [weak self] in self?.recordOutput(at: Date()) }
+        terminal.onBell = { [weak self] in self?.rang = true }
     }
     func start() {
         guard !started else { return }
@@ -148,7 +151,7 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         if !terminal.process.running {
             ended = true; exitCode = -1
             Log.session.error("PTY start failed for \(self.kind.rawValue, privacy: .public)")
-            terminal.feed(text: "\r\n\u{1b}[31mNotchAgent: 터미널을 시작하지 못했습니다. 작업 폴더 권한과 /bin/zsh를 확인하세요.\u{1b}[0m\r\n")
+            terminal.feed(text: "\r\n\u{1b}[31mNotchAgent: " + L("터미널을 시작하지 못했습니다. 작업 폴더 권한과 /bin/zsh를 확인하세요.", "Could not start the terminal. Check the work folder permissions and /bin/zsh.") + "\u{1b}[0m\r\n")
         }
     }
     /// Ends the session and everything it started. Children that ignore SIGHUP/SIGTERM
@@ -174,6 +177,53 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         guard !pending.isEmpty else { return }
         ProcessCleanup.finish(groups: pending.flatMap(\.groups), shells: pending.map(\.shell), grace: grace)
     }
+    @ObservationIgnored private var appliedAppearance: TerminalAppearance?
+    /// Theme, font and caret color; cheap to call repeatedly.
+    func apply(_ appearance: TerminalAppearance) {
+        guard appearance != appliedAppearance else { return }
+        appliedAppearance = appearance
+        let theme = appearance.theme
+        terminal.nativeBackgroundColor = TerminalTheme.ns(theme.background)
+        terminal.nativeForegroundColor = TerminalTheme.ns(theme.foreground)
+        terminal.installColors(theme.ansi.map(TerminalTheme.term))
+        terminal.caretColor = appearance.accent.nsColor
+        terminal.font = TerminalFont.font(appearance.font, size: appearance.size)
+    }
+    var isRunning: Bool { started && !ended }
+    /// Closing now would interrupt work: an agent is streaming output, or the shell is running
+    /// a command (its foreground process group is not the shell itself). Idle sessions close
+    /// without asking; the CLIs keep their conversations for /resume.
+    var isBusy: Bool {
+        guard isRunning else { return false }
+        if isWorking { return true }
+        guard kind == .shell else { return false }
+        let fd = terminal.process.childfd
+        let foreground = fd >= 0 ? tcgetpgrp(fd) : -1
+        return foreground > 0 && foreground != terminal.process.shellPid
+    }
+    /// When the current stretch of work began (nil while idle).
+    var workingSince: Date? { isWorking ? tracker.busySince : nil }
+    /// The program and arguments this session runs (inside a login shell).
+    var commandLine: [String] { [executable] + arguments }
+    func recordOutput(at date: Date) { tracker.output(at: date) }
+    /// Samples activity. Returns a reason when the session newly needs the user's attention.
+    func tick(now: Date, visible: Bool) -> AttentionReason? {
+        let working = !ended && tracker.isWorking(now: now)
+        if working != isWorking { isWorking = working }
+        let finished = tracker.finishedWork(now: now)
+        let bell = rang; rang = false
+        var reason: AttentionReason?
+        if ended, started, !exitNoticed { exitNoticed = true; if !stopping { reason = .exited } }
+        else if bell { reason = .bell }
+        else if finished { reason = .finished }
+        if visible {
+            if attention != nil { attention = nil }
+            return nil
+        }
+        if let reason { attention = reason }
+        return reason
+    }
+    func clearAttention() { if attention != nil { attention = nil } }
     nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
     nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         let clean = String(title.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
@@ -192,7 +242,7 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
 
 struct EmbeddedTerminal: NSViewRepresentable {
     let session: TerminalSession
-    let fontSize: Double
+    let appearance: TerminalAppearance
     func makeNSView(context: Context) -> NSView {
         let host = NSView()
         let terminal = session.terminal
@@ -213,9 +263,7 @@ struct EmbeddedTerminal: NSViewRepresentable {
         return host
     }
     func updateNSView(_ nsView: NSView, context: Context) {
-        if session.terminal.font.pointSize != fontSize {
-            session.terminal.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        }
+        session.apply(appearance)
     }
     // Removing the view never closes its PTY. SessionStore owns the lifetime.
 }

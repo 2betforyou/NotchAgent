@@ -27,7 +27,7 @@ final class UsageService {
         guard enabled, !isLoading else { return }
         let override = UserDefaults.standard.string(forKey: "codexPath") ?? ""
         guard let path = ShellSafety.executable("codex", override: override) else {
-            error = "Codex CLI를 찾을 수 없습니다. 설정에서 실행 파일을 지정하세요."
+            error = L("Codex CLI를 찾을 수 없습니다. 설정에서 실행 파일을 지정하세요.", "Codex CLI not found. Set its path in Settings.")
             return
         }
         isLoading = true
@@ -90,7 +90,7 @@ final class UsageRPC {
                 // Let output that arrived just before exit be consumed first.
                 try? await Task.sleep(for: .milliseconds(300))
                 Log.usage.error("codex app-server exited early (status \(status, privacy: .public))")
-                self?.finish(.failure(UsageFailure.unavailable("Codex 연결이 종료됐습니다. CLI 로그인 상태를 확인하세요.")))
+                self?.finish(.failure(UsageFailure.unavailable(L("Codex 연결이 종료됐습니다. CLI 로그인 상태를 확인하세요.", "The Codex connection closed. Check that the CLI is signed in."))))
             }
         }
         do {
@@ -102,21 +102,21 @@ final class UsageRPC {
                 guard let self else { return }
                 // Optional lifetime-token support must not block valid quota data.
                 if self.results[3] != nil { self.completeSnapshot() }
-                else { self.finish(.failure(UsageFailure.unavailable("사용량 응답 시간이 초과됐습니다. 네트워크와 Codex 로그인을 확인하세요."))) }
+                else { self.finish(.failure(UsageFailure.unavailable(L("사용량 응답 시간이 초과됐습니다. 네트워크와 Codex 로그인을 확인하세요.", "Usage request timed out. Check your network and Codex sign-in.")))) }
             }
-        } catch { finish(.failure(UsageFailure.unavailable("Codex를 실행할 수 없습니다. 설정의 실행 경로를 확인하세요."))) }
+        } catch { finish(.failure(UsageFailure.unavailable(L("Codex를 실행할 수 없습니다. 설정의 실행 경로를 확인하세요.", "Could not run Codex. Check its path in Settings.")))) }
     }
 
     private func send(_ message: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: message), let handle = input?.fileHandleForWriting else { return }
         do { try handle.write(contentsOf: data + Data([10])) }
-        catch { finish(.failure(UsageFailure.unavailable("Codex 연결에 쓸 수 없습니다."))) }
+        catch { finish(.failure(UsageFailure.unavailable(L("Codex 연결에 쓸 수 없습니다.", "Could not write to the Codex connection.")))) }
     }
     private func consume(_ data: Data) {
         guard completion != nil, !data.isEmpty else { return }
         buffer.append(data)
         guard buffer.count <= 4_000_000 else {
-            finish(.failure(UsageFailure.unavailable("Codex 응답이 예상 크기를 초과했습니다."))); return
+            finish(.failure(UsageFailure.unavailable(L("Codex 응답이 예상 크기를 초과했습니다.", "The Codex response was larger than expected.")))); return
         }
         while let newline = buffer.firstIndex(of: 10) {
             let line = buffer[..<newline]
@@ -125,7 +125,7 @@ final class UsageRPC {
                   let id = message["id"] as? Int else { continue }
             if id == 1 {
                 guard message["error"] == nil else {
-                    finish(.failure(UsageFailure.unavailable("Codex 버전이 호환되지 않습니다. CLI를 업데이트하세요."))); return
+                    finish(.failure(UsageFailure.unavailable(L("Codex 버전이 호환되지 않습니다. CLI를 업데이트하세요.", "This Codex version is not supported. Update the CLI.")))); return
                 }
                 send(["method": "initialized", "params": [:]])
                 send(["id": 2, "method": "account/read", "params": ["refreshToken": false]])
@@ -135,7 +135,7 @@ final class UsageRPC {
                 received.insert(id)
                 results[id] = message["result"] as? [String: Any]
                 if id == 3 && message["error"] != nil {
-                    finish(.failure(UsageFailure.unavailable("사용량을 읽을 수 없습니다. ChatGPT 계정으로 Codex CLI에 로그인하세요."))); return
+                    finish(.failure(UsageFailure.unavailable(L("사용량을 읽을 수 없습니다. ChatGPT 계정으로 Codex CLI에 로그인하세요.", "Could not read usage. Sign in to the Codex CLI with a ChatGPT account.")))); return
                 }
                 if received == Set([2, 3, 4]) { completeSnapshot(); return }
             }
@@ -144,7 +144,7 @@ final class UsageRPC {
     private func completeSnapshot() {
         let account = results[2]?["account"] as? [String: Any]
         guard let limits = results[3], let snapshot = UsageSnapshot.parse(limits: limits, activity: results[4], plan: account?["planType"] as? String) else {
-            finish(.failure(UsageFailure.unavailable("이 계정에서 표시할 구독 한도를 제공하지 않습니다."))); return
+            finish(.failure(UsageFailure.unavailable(L("이 계정에서 표시할 구독 한도를 제공하지 않습니다.", "This account does not report subscription limits.")))); return
         }
         finish(.success(snapshot))
     }

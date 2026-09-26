@@ -4,6 +4,7 @@ import XCTest
 final class ClaudeUsageTests: XCTestCase {
     private var directory: URL!
     override func setUp() async throws {
+        AppLanguage.current = .korean
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("NotchAgentClaude-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
@@ -60,7 +61,7 @@ final class ClaudeUsageTests: XCTestCase {
         let process = Process(), stdin = Pipe(), stdout = Pipe()
         process.executableURL = URL(fileURLWithPath: try XCTUnwrap(Bundle.main.executablePath))
         process.arguments = [ClaudeStatusLine.argument]
-        var env = ["NOTCHAGENT_SUPPORT_DIR": directory.path, "PATH": "/usr/bin:/bin"]
+        var env = ["NOTCHAGENT_SUPPORT_DIR": directory.path, "PATH": "/usr/bin:/bin", "NOTCHAGENT_LANGUAGE": "korean"]
         if let chain { env[ClaudeStatusLine.chainVariable] = chain }
         process.environment = env
         process.standardInput = stdin; process.standardOutput = stdout

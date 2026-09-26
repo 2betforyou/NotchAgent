@@ -75,7 +75,7 @@ enum ClaudeStatusLine {
         let model = (json["model"] as? [String: Any])?["display_name"] as? String
         let usage = (json["rate_limits"] as? [String: Any])
             .flatMap { ClaudeUsage.parse(limits: $0, fetchedAt: now, now: now) }?
-            .windows.map { "\($0.title) \(Int($0.remaining))% 남음" } ?? []
+            .windows.map { L("\($0.title) \(Int($0.remaining))% 남음", "\($0.title) \(Int($0.remaining))% left") } ?? []
         return ([model].compactMap { $0 } + usage).joined(separator: " · ")
     }
 }
@@ -115,7 +115,10 @@ final class ClaudeUsageService {
         }
     }
     func stop() { timer?.invalidate(); timer = nil }
-    static let refreshHelp = "Claude 사용량은 직접 조회할 수 없어, NotchAgent에서 연 Claude 세션이 응답할 때마다 계정 전체 기준으로 갱신됩니다. 새로고침은 마지막으로 받은 값을 다시 읽습니다."
+    static var refreshHelp: String {
+        L("Claude 사용량은 직접 조회할 수 없어, NotchAgent에서 연 Claude 세션이 응답할 때마다 계정 전체 기준으로 갱신됩니다. 새로고침은 마지막으로 받은 값을 다시 읽습니다.",
+          "Claude usage cannot be queried directly; it updates, account-wide, whenever a Claude session opened in NotchAgent responds. Refresh re-reads the latest value.")
+    }
     func setEnabled(_ value: Bool) {
         enabled = value
         UserDefaults.standard.set(value, forKey: "claudeUsageEnabled")

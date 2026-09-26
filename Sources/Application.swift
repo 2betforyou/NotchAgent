@@ -5,6 +5,9 @@ import Carbon
 @main
 enum NotchAgentApp {
     @MainActor static func main() {
+        // NOTCHAGENT_LANGUAGE lets tests pin the status line helper's language.
+        AppLanguage.current = (ProcessInfo.processInfo.environment["NOTCHAGENT_LANGUAGE"] ?? UserDefaults.standard.string(forKey: "language"))
+            .flatMap(AppLanguage.init(rawValue:)) ?? .system
         if CommandLine.arguments.dropFirst().first == ClaudeStatusLine.argument { exit(ClaudeStatusLine.run()) }
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -17,7 +20,6 @@ enum NotchAgentApp {
 
 final class IslandPanel: NSPanel {
     var acceptsKeyboard = false
-    var onCollapse: (() -> Void)?
     override var canBecomeKey: Bool { acceptsKeyboard }
     override var canBecomeMain: Bool { false }
     // AppKit pushes windows below the menu bar by default; the island must sit on the notch itself.
@@ -28,13 +30,6 @@ final class IslandPanel: NSPanel {
         }
         super.sendEvent(event)
     }
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           event.charactersIgnoringModifiers == "w" {
-            onCollapse?(); return true
-        }
-        return super.performKeyEquivalent(with: event)
-    }
 }
 
 @MainActor
@@ -43,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: IslandPanel!
     private var statusItem: NSStatusItem!
     private var timer: Timer?
+    private var activityTimer: Timer?
+    private var menuTracking = false
     private var hoverStart: Date?
     private var leaveStart: Date?
     private var previousApp: NSRunningApplication?
@@ -78,14 +75,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setAccessibilityLabel("NotchAgent")
         model.showTerminal = { [weak self] in self?.expand() }
         model.collapse = { [weak self] in self?.collapse() }
-        panel.onCollapse = model.collapse
         model.showSettings = { [weak self] in self?.showSettings() }
         model.runAlert = { [weak self] alert in self?.runAlert(alert) ?? alert.runModal() }
+        model.beginQuickPrompt = { [weak self] in self?.beginQuickPrompt() }
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            // Clicking another app while typing a quick prompt cancels it.
+            MainActor.assumeIsolated {
+                guard let self, self.model.quickPromptActive else { return }
+                self.model.quickPromptActive = false
+                self.collapse()
+            }
+        }
         positionPanel()
         panel.orderFrontRegardless()
         installMenu()
         installShortcut()
         NotificationCenter.default.addObserver(self, selector: #selector(displaysChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        // A menu opened from the preview (folder switcher) must not be closed by hover-out.
+        NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.menuTracking = true }
+        }
+        NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.menuTracking = false; self?.leaveStart = nil }
+        }
         // Displays can come back in a different arrangement after sleep.
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysChanged), name: NSWorkspace.didWakeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysChanged), name: NSWorkspace.screensDidWakeNotification, object: nil)
@@ -95,8 +107,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.trackPointer() }
         }
         RunLoop.main.add(timer!, forMode: .common)
+        activityTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.tickActivity() }
+        }
+        RunLoop.main.add(activityTimer!, forMode: .common)
         model.usage.start()
         model.claudeUsage.start()
+        model.restoreSavedSessions()
         if !UserDefaults.standard.bool(forKey: "onboarded") { showWelcome() }
     }
     private func positionPanel() {
@@ -120,20 +137,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrame(NSRect(x: target.frame.midX - size.width / 2, y: target.frame.maxY - size.height, width: size.width, height: size.height), display: true)
     }
     private func trackPointer() {
-        guard !locked, var screen else { return }
+        guard !locked, !menuTracking, var screen else { return }
         // "Pointer" mode: the closed island follows the mouse to whichever display it is on.
         if model.preferredDisplay == "pointer", model.phase == .closed,
            let pointerScreen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }), pointerScreen != screen {
             positionPanel(); screen = self.screen ?? screen
         }
-        let width = model.phase == .closed ? model.compactWidth : model.phase == .preview ? min(570, model.panelWidth) : model.panelWidth
-        let height = model.phase == .closed ? model.notchHeight : model.phase == .preview ? model.previewHeight : model.panelHeight
+        let width = model.phase == .closed ? model.closedWidth : model.phase == .preview ? min(570, model.panelWidth) : model.panelWidth
+        let height = model.phase == .closed ? model.closedHeight : model.phase == .preview ? model.previewHeight : model.panelHeight
         let rect = NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
         let inside = rect.contains(NSEvent.mouseLocation)
         // Keep delivering a drag (for example a terminal selection) that leaves the island.
         if NSEvent.pressedMouseButtons != 0, !panel.ignoresMouseEvents { return }
         panel.ignoresMouseEvents = !inside
         if model.phase == .terminal { hoverStart = nil; leaveStart = nil; return }
+        if model.quickPromptActive { panel.ignoresMouseEvents = false; leaveStart = nil; return }
         if inside {
             leaveStart = nil
             if hoverStart == nil { hoverStart = Date() }
@@ -141,8 +159,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             hoverStart = nil
             if leaveStart == nil { leaveStart = Date() }
-            if model.phase == .preview, Date().timeIntervalSince(leaveStart!) > 0.28 { model.phase = .closed }
+            if model.phase == .preview, Date().timeIntervalSince(leaveStart!) > 0.28 {
+                // If the preview holds keyboard focus (after a quick prompt), hand it back too.
+                if panel.isKeyWindow { collapse() } else { model.phase = .closed }
+            }
         }
+    }
+    private func beginQuickPrompt() {
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
+        panel.acceptsKeyboard = true; panel.ignoresMouseEvents = false
+        NSApp.activate(); panel.makeKeyAndOrderFront(nil)
+        model.quickPromptActive = true
     }
     @objc func expand() {
         if model.phase != .terminal {
@@ -188,21 +216,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "NotchAgent")
+        buildMenus()
+        model.languageChanged = { [weak self] in
+            self?.buildMenus()
+            self?.settingsWindow?.title = L("NotchAgent 설정", "NotchAgent Settings")
+        }
+    }
+    /// Status item menu and the main menu (edit commands for the terminal); rebuilt on language change.
+    private func buildMenus() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "NotchAgent 열기 / 접기", action: #selector(toggle), keyEquivalent: "")
-        menu.addItem(withTitle: "설정…", action: #selector(showSettings), keyEquivalent: ",")
+        menu.addItem(withTitle: L("NotchAgent 열기 / 접기", "Open / Close NotchAgent"), action: #selector(toggle), keyEquivalent: "")
+        menu.addItem(withTitle: L("설정…", "Settings…"), action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "NotchAgent 종료", action: #selector(quit), keyEquivalent: "q")
+        menu.addItem(withTitle: L("NotchAgent 종료", "Quit NotchAgent"), action: #selector(quit), keyEquivalent: "q")
         for item in menu.items { item.target = self }
         statusItem.menu = menu
         // Main menu supplies standard edit actions to the embedded terminal and text fields.
         let main = NSMenu()
         let appItem = NSMenuItem(); appItem.submenu = menu.copy() as? NSMenu; main.addItem(appItem)
-        let editItem = NSMenuItem(title: "편집", action: nil, keyEquivalent: "")
-        let edit = NSMenu(title: "편집")
-        edit.addItem(withTitle: "복사", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "모두 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let editItem = NSMenuItem(title: L("편집", "Edit"), action: nil, keyEquivalent: "")
+        let edit = NSMenu(title: L("편집", "Edit"))
+        edit.addItem(withTitle: L("복사", "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: L("붙여넣기", "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: L("모두 선택", "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit; main.addItem(editItem); NSApp.mainMenu = main
     }
     private func installShortcut() {
@@ -213,15 +249,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { delegate.toggle() }
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &eventHandler)
-        let result = RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey | optionKey), EventHotKeyID(signature: 0x4E414754, id: 1), GetApplicationEventTarget(), 0, &hotKey)
-        if result != noErr { Log.app.error("hotkey registration failed: \(result, privacy: .public)") }
-        if result != noErr { model.lastError = "⌃⌥Space 단축키를 등록할 수 없습니다. 다른 앱의 단축키와 충돌하는지 확인하세요. 메뉴 막대로 열 수 있습니다." }
+        if !register(model.hotkey) {
+            model.lastError = L("\(model.hotkey.label) 단축키를 등록할 수 없습니다. 다른 앱의 단축키와 충돌하는지 확인하세요. 메뉴 막대로 열 수 있습니다.", "Could not register \(model.hotkey.label). Another app may be using it. You can still open NotchAgent from the menu bar.")
+        }
+        model.applyHotkey = { [weak self] new in self?.changeHotkey(to: new) ?? false }
+        model.suspendHotkey = { [weak self] suspended in
+            guard let self else { return }
+            if suspended { self.unregisterHotkey() } else { _ = self.register(self.model.hotkey) }
+        }
+    }
+    private func register(_ key: Hotkey) -> Bool {
+        unregisterHotkey()
+        let result = RegisterEventHotKey(key.keyCode, key.modifiers, EventHotKeyID(signature: 0x4E414754, id: 1), GetApplicationEventTarget(), 0, &hotKey)
+        if result != noErr { Log.app.error("hotkey registration failed: \(result, privacy: .public)"); hotKey = nil }
+        return result == noErr
+    }
+    private func unregisterHotkey() {
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        hotKey = nil
+    }
+    /// Switches the global shortcut; keeps the old one if the new combination is taken.
+    private func changeHotkey(to new: Hotkey) -> Bool {
+        guard register(new) else { _ = register(model.hotkey); return false }
+        model.hotkey = new
+        return true
     }
     @objc func showSettings() {
         collapse()
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 590, height: 580), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-            window.title = "NotchAgent 설정"; window.isReleasedWhenClosed = false
+            window.title = L("NotchAgent 설정", "NotchAgent Settings"); window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView(model: model, displayChanged: { [weak self] in self?.positionPanel() }))
             window.center(); settingsWindow = window
         }
@@ -239,17 +296,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if model.runningCount > 0 {
+        // Idle sessions are saved and come back next launch; only interrupting work needs a yes.
+        let busy = model.sessions.filter(\.isBusy).count
+        if busy > 0 {
             let alert = NSAlert()
-            alert.messageText = "NotchAgent를 종료할까요?"
-            alert.informativeText = "열려 있는 \(model.runningCount)개의 터미널 세션과 실행 중인 작업이 종료됩니다."
-            alert.addButton(withTitle: "취소"); alert.addButton(withTitle: "종료")
+            alert.messageText = L("NotchAgent를 종료할까요?", "Quit NotchAgent?")
+            alert.informativeText = L("작업 중인 \(busy)개의 세션이 중단됩니다.", "\(busy) session(s) that are working will stop.")
+            alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("종료", "Quit"))
             if runAlert(alert) != .alertSecondButtonReturn { return .terminateCancel }
         }
         return .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
-        timer?.invalidate(); model.usage.stop(); model.claudeUsage.stop()
+        timer?.invalidate(); activityTimer?.invalidate(); model.usage.stop(); model.claudeUsage.stop()
+        model.saveSessions() // before stopping, which marks every session ended
         TerminalSession.stopAll(model.sessions)
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let eventHandler { RemoveEventHandler(eventHandler) }
