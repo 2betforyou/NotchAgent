@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode / SwiftPM
+xcuserdata/
+*.xcuserstate
+*.xcresult
+DerivedData/
+.build/
+.swiftpm/
+BuildLogs/
+
+# Build output (release binaries go to GitHub Releases, not the repository)
+Dist/
+*.dmg
+*.zip
+*.xcarchive
+
+# Local notes and tool settings that must stay private
+PRIVATE_NOTES.md
+.claude/
+.env
+*.p12
+*.cer
+*.mobileprovision
