@@ -112,6 +112,14 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     /// Something happened while the user was not looking: work finished, a bell, or exit.
     private(set) var attention: AttentionReason?
     @ObservationIgnored private var tracker = ActivityTracker()
+    /// The CLI's conversation id (Claude session id / Codex thread id), for exact resume.
+    @ObservationIgnored var conversationID: String?
+    /// Once a hook/notify event arrives, the CLI's own signals replace output-timing guesses.
+    @ObservationIgnored private var hasAgentEvents = false
+    @ObservationIgnored private var promptSubmittedAt: Date?
+    @ObservationIgnored private var pendingFinished = false
+    @ObservationIgnored private var pendingNeedsInput = false
+    @ObservationIgnored private var lastFinishedAt: Date?
     @ObservationIgnored private var rang = false
     @ObservationIgnored private var exitNoticed = false
     @ObservationIgnored let terminal: AgentTerminalView
@@ -144,7 +152,10 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     func start() {
         guard !started else { return }
         started = true
-        let env = ShellSafety.environment().merging(environment) { $1 }.map { "\($0.key)=\($0.value)" }
+        // Hooks and notify programs inherit this and report back which tab they belong to.
+        let env = ShellSafety.environment().merging(environment) { $1 }
+            .merging([AgentEvents.sessionVariable: id.uuidString]) { $1 }
+            .map { "\($0.key)=\($0.value)" }
         let command = ([executable] + arguments).map(ShellSafety.quote).joined(separator: " ")
         let args = kind == .shell ? ["-l"] : ["-lc", "exec " + command]
         terminal.startProcess(executable: "/bin/zsh", args: args, environment: env, currentDirectory: directory.path)
@@ -202,16 +213,39 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         return foreground > 0 && foreground != terminal.process.shellPid
     }
     /// When the current stretch of work began (nil while idle).
-    var workingSince: Date? { isWorking ? tracker.busySince : nil }
+    var workingSince: Date? {
+        guard isWorking else { return nil }
+        return hasAgentEvents && reportsStart ? promptSubmittedAt : tracker.busySince
+    }
     /// The program and arguments this session runs (inside a login shell).
     var commandLine: [String] { [executable] + arguments }
     func recordOutput(at date: Date) { tracker.output(at: date) }
+    /// Only Claude reports when a turn starts; Codex reports only when it ends.
+    private var reportsStart: Bool { kind == .claude }
+    func receive(_ event: AgentEvent?, conversation: String?, now: Date) {
+        hasAgentEvents = true
+        if let conversation { conversationID = conversation }
+        switch event {
+        case .started: promptSubmittedAt = now
+        case .finished:
+            promptSubmittedAt = nil
+            // The output-timing guess may already have announced this turn.
+            if let last = lastFinishedAt, now.timeIntervalSince(last) < 8 { break }
+            pendingFinished = true
+        case .needsInput: pendingNeedsInput = true
+        case nil: break
+        }
+    }
     /// Samples activity. Returns a reason when the session newly needs the user's attention.
     func tick(now: Date, visible: Bool) -> AttentionReason? {
-        let working = !ended && tracker.isWorking(now: now)
+        let precise = hasAgentEvents
+        let working = !ended && (precise && reportsStart ? promptSubmittedAt != nil : tracker.isWorking(now: now))
         if working != isWorking { isWorking = working }
-        let finished = tracker.finishedWork(now: now)
-        let bell = rang; rang = false
+        let guessedFinish = tracker.finishedWork(now: now)
+        let finished = precise ? pendingFinished : guessedFinish
+        pendingFinished = false
+        if finished { lastFinishedAt = now }
+        let bell = rang || pendingNeedsInput; rang = false; pendingNeedsInput = false
         var reason: AttentionReason?
         if ended, started, !exitNoticed { exitNoticed = true; if !stopping { reason = .exited } }
         else if bell { reason = .bell }

@@ -9,6 +9,7 @@ enum NotchAgentApp {
         AppLanguage.current = (ProcessInfo.processInfo.environment["NOTCHAGENT_LANGUAGE"] ?? UserDefaults.standard.string(forKey: "language"))
             .flatMap(AppLanguage.init(rawValue:)) ?? .system
         if CommandLine.arguments.dropFirst().first == ClaudeStatusLine.argument { exit(ClaudeStatusLine.run()) }
+        if CommandLine.arguments.dropFirst().first == AgentEvents.argument { exit(AgentEvents.run(Array(CommandLine.arguments.dropFirst(2)))) }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -20,6 +21,24 @@ enum NotchAgentApp {
 
 final class IslandPanel: NSPanel {
     var acceptsKeyboard = false
+    /// Tab shortcuts (⌘1–8, ⇧⌘[ ], ⌘T) handled before the terminal sees the key.
+    var onTabShortcut: ((String, Bool) -> Bool)?
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if flags == .command || flags == [.command, .shift], let key = event.charactersIgnoringModifiers?.lowercased(),
+           onTabShortcut?(Self.usKey(event) ?? key, flags.contains(.shift)) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+    /// Layout-independent key for shortcuts (a Korean input source reports "ㅅ" for T).
+    private static func usKey(_ event: NSEvent) -> String? {
+        switch Int(event.keyCode) {
+        case 18: "1"; case 19: "2"; case 20: "3"; case 21: "4"; case 23: "5"; case 22: "6"; case 26: "7"; case 28: "8"
+        case 17: "t"; case 30: "]"; case 33: "["
+        default: nil
+        }
+    }
     override var canBecomeKey: Bool { acceptsKeyboard }
     override var canBecomeMain: Bool { false }
     // AppKit pushes windows below the menu bar by default; the island must sit on the notch itself.
@@ -78,6 +97,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.showSettings = { [weak self] in self?.showSettings() }
         model.runAlert = { [weak self] alert in self?.runAlert(alert) ?? alert.runModal() }
         model.beginQuickPrompt = { [weak self] in self?.beginQuickPrompt() }
+        panel.onTabShortcut = { [weak self] key, shift in
+            guard let self, self.model.phase == .terminal else { return false }
+            return self.model.handleTabShortcut(key: key, shift: shift)
+        }
+        DistributedNotificationCenter.default().addObserver(forName: AgentEvents.notification, object: nil, queue: .main) { [weak self] note in
+            let info = note.userInfo ?? [:]
+            let session = info["session"] as? String ?? "", event = info["event"] as? String ?? "", conversation = info["conversation"] as? String ?? ""
+            MainActor.assumeIsolated { self?.model.handleAgentEvent(session: session, event: event, conversation: conversation) }
+        }
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             // Clicking another app while typing a quick prompt cancels it.
             MainActor.assumeIsolated {
@@ -103,10 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysChanged), name: NSWorkspace.screensDidWakeNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(screenLocked), name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(screenUnlocked), name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
-        timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.trackPointer() }
-        }
-        RunLoop.main.add(timer!, forMode: .common)
+        schedulePointerTimer(PointerPolling.fast)
         activityTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.model.tickActivity() }
         }
@@ -131,10 +156,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             physicalWidth = max(0, right.minX - left.maxX)
         } else { physicalWidth = 110 }
         model.compactWidth = physicalWidth + 100
+        model.physicalNotchWidth = notch > 0 ? physicalWidth : 0
         model.panelWidth = min(940, target.frame.width - 64)
         model.panelHeight = min(620, target.frame.height - 100)
         let size = NSSize(width: model.panelWidth + 32, height: model.panelHeight + 32)
         panel.setFrame(NSRect(x: target.frame.midX - size.width / 2, y: target.frame.maxY - size.height, width: size.width, height: size.height), display: true)
+    }
+    private var pointerInterval: TimeInterval = 0
+    /// Re-arms the pointer timer only when the rate changes; a small tolerance lets macOS
+    /// coalesce wakeups with other timers.
+    private func schedulePointerTimer(_ interval: TimeInterval) {
+        guard interval != pointerInterval else { return }
+        pointerInterval = interval
+        timer?.invalidate()
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.trackPointer() }
+        }
+        t.tolerance = interval * 0.2
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
     private func trackPointer() {
         guard !locked, !menuTracking, var screen else { return }
@@ -147,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let height = model.phase == .closed ? model.closedHeight : model.phase == .preview ? model.previewHeight : model.panelHeight
         let rect = NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
         let inside = rect.contains(NSEvent.mouseLocation)
+        let near = rect.insetBy(dx: -PointerPolling.nearMargin, dy: -PointerPolling.nearMargin).contains(NSEvent.mouseLocation)
+        schedulePointerTimer(PointerPolling.interval(near: near, phase: model.phase, pending: hoverStart != nil || leaveStart != nil))
         // Keep delivering a drag (for example a terminal selection) that leaves the island.
         if NSEvent.pressedMouseButtons != 0, !panel.ignoresMouseEvents { return }
         panel.ignoresMouseEvents = !inside
@@ -239,6 +281,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: L("복사", "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: L("붙여넣기", "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: L("모두 선택", "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(.separator())
+        // The terminal's own find bar (SwiftTerm handles these text finder actions).
+        for (title, key, shift, action) in [(L("찾기…", "Find…"), "f", false, NSTextFinder.Action.showFindInterface),
+                                            (L("다음 찾기", "Find Next"), "g", false, .nextMatch),
+                                            (L("이전 찾기", "Find Previous"), "g", true, .previousMatch)] {
+            let item = NSMenuItem(title: title, action: #selector(NSResponder.performTextFinderAction(_:)), keyEquivalent: key)
+            item.keyEquivalentModifierMask = shift ? [.command, .shift] : [.command]
+            item.tag = action.rawValue
+            edit.addItem(item)
+        }
         editItem.submenu = edit; main.addItem(editItem); NSApp.mainMenu = main
     }
     private func installShortcut() {

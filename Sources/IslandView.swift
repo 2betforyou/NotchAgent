@@ -102,8 +102,8 @@ struct IslandView: View {
                 compact.transition(AnyTransition(.blurReplace).animation(reduceMotion ? nil : Motion.content))
             } else {
                 VStack(spacing: 0) {
-                    // Reserve the physical camera housing; no controls render underneath it.
-                    Color.clear.frame(height: model.notchHeight + 4)
+                    // The top row sits in the menu bar band; only the camera housing stays empty.
+                    topRow.padding(.bottom, 10)
                     if let error = model.lastError {
                         errorBanner(error).padding(.bottom, 10).transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -212,19 +212,33 @@ struct IslandView: View {
         .padding(10).background(Color.orange.opacity(0.14)).clipShape(.rect(cornerRadius: 9))
         .accessibilityElement(children: .combine)
     }
-    private var brand: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "terminal.fill").foregroundStyle(Palette.mint)
-            Text("NotchAgent").font(.headline)
-            Spacer()
-            Text(model.hotkey.label.uppercased()).font(.caption2.monospaced()).foregroundStyle(Palette.muted)
-            Button { model.showSettings?() } label: { Image(systemName: "gearshape") }
-                .buttonStyle(QuietButton()).help(L("설정", "Settings")).accessibilityLabel(L("설정", "Settings"))
+    /// Header in the menu bar band, split around the physical notch.
+    private var topRow: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "terminal.fill").foregroundStyle(Palette.mint)
+                Text("NotchAgent").font(.headline).lineLimit(1).fixedSize()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Nothing is drawn under the camera. Screens without a notch keep only a small gap.
+            Color.clear.frame(width: model.hasPhysicalNotch ? model.physicalNotchWidth + 16 : 16)
+            HStack(spacing: 8) {
+                if model.phase == .preview {
+                    Text(model.hotkey.label.uppercased()).font(.caption2.monospaced()).foregroundStyle(Palette.muted)
+                }
+                Button { model.showSettings?() } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(QuietButton()).help(L("설정", "Settings")).accessibilityLabel(L("설정", "Settings"))
+                if model.phase == .terminal {
+                    Button { model.collapse?() } label: { Image(systemName: "chevron.up") }.buttonStyle(QuietButton())
+                        .help(L("접기 · \(model.hotkey.label)", "Close · \(model.hotkey.label)")).accessibilityLabel(L("노치 접기", "Close notch"))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
+        .frame(height: model.notchHeight)
     }
     private var preview: some View {
         VStack(alignment: .leading, spacing: 16) {
-            brand
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.previewHeadline)
@@ -257,14 +271,8 @@ struct IslandView: View {
     }
     private var terminalPanel: some View {
         VStack(spacing: 12) {
-            HStack {
-                Image(systemName: "terminal.fill").foregroundStyle(Palette.mint)
-                Text("NotchAgent").font(.headline)
-                Rectangle().fill(Palette.line).frame(width: 1, height: 15).padding(.horizontal, 4)
-                WorkspaceBar(model: model)
-                Button { model.showSettings?() } label: { Image(systemName: "gearshape") }.buttonStyle(QuietButton()).help(L("설정", "Settings")).accessibilityLabel(L("설정", "Settings"))
-                Button { model.collapse?() } label: { Image(systemName: "chevron.up") }.buttonStyle(QuietButton()).help(L("접기 · \(model.hotkey.label)", "Close · \(model.hotkey.label)")).accessibilityLabel(L("노치 접기", "Close notch"))
-            }
+            // Folders get the full width below the menu bar band.
+            WorkspaceBar(model: model)
             if model.visibleSessions.isEmpty {
                 launchPad
             } else {

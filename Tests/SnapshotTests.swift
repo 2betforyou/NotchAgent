@@ -14,6 +14,8 @@ final class SnapshotTests: XCTestCase {
         let output = URL(fileURLWithPath: env["NOTCHAGENT_SNAPSHOT_DIR"]!)
         let model = AppModel()
         model.notchHeight = 38
+        model.hasPhysicalNotch = true
+        model.physicalNotchWidth = 185 // 14-inch MacBook Pro camera housing
         model.panelWidth = 900; model.panelHeight = 570
         if model.usage.enabled {
             model.usage.refresh()

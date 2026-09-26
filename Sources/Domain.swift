@@ -106,14 +106,16 @@ enum Reorder {
 struct SavedSession: Codable, Equatable {
     let kind: AgentKind
     let path: String
+    /// The CLI's own conversation id, when it reported one; resumes that exact chat.
+    var conversation: String? = nil
 }
 
 enum SessionRestore {
     /// Flags that reopen the most recent conversation in the working directory.
-    static func resumeArguments(for kind: AgentKind) -> [String] {
+    static func resumeArguments(for kind: AgentKind, conversation: String? = nil) -> [String] {
         switch kind {
-        case .claude: ["--continue"]
-        case .codex: ["resume", "--last"]
+        case .claude: conversation.map { ["--resume", $0] } ?? ["--continue"]
+        case .codex: conversation.map { ["resume", $0] } ?? ["resume", "--last"]
         case .shell, .gemini: []
         }
     }
@@ -132,9 +134,11 @@ enum SessionRestore {
     static func plan(_ saved: [SavedSession]) -> [(session: SavedSession, resume: Bool)] {
         var seen = Set<String>()
         return saved.map { item in
+            guard !resumeArguments(for: item.kind).isEmpty else { return (item, false) }
+            // A known conversation id resumes exactly that chat.
+            if item.conversation != nil { return (item, true) }
             let key = item.kind.rawValue + "\u{0}" + Workspaces.normalize(item.path)
-            let first = seen.insert(key).inserted
-            return (item, first && !resumeArguments(for: item.kind).isEmpty)
+            return (item, seen.insert(key).inserted)
         }
     }
 }
@@ -194,6 +198,18 @@ struct ActivityTracker {
         guard let lastOutput, let start = busySince, now.timeIntervalSince(lastOutput) >= Self.idleAfter else { return false }
         busySince = nil
         return lastOutput.timeIntervalSince(start) >= Self.minimumWork
+    }
+}
+
+/// How often to sample the pointer. Fast only while it matters (pointer near the island, the
+/// island open, or a hover/leave delay running); otherwise a slow heartbeat saves wakeups.
+/// The pointer crosses the near margin before it reaches the notch, so hover still feels instant.
+enum PointerPolling {
+    static let fast: TimeInterval = 0.08
+    static let slow: TimeInterval = 0.4
+    static let nearMargin: CGFloat = 120
+    static func interval(near: Bool, phase: IslandPhase, pending: Bool) -> TimeInterval {
+        near || pending || phase != .closed ? fast : slow
     }
 }
 

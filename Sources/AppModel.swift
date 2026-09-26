@@ -12,6 +12,8 @@ final class AppModel {
     var panelWidth: CGFloat = 900
     var panelHeight: CGFloat = 570
     var hasPhysicalNotch = true
+    /// Width of the camera housing; the top row keeps only this strip empty.
+    var physicalNotchWidth: CGFloat = 0
     var displayName = ""
     var workspaces: [SavedWorkspace] = []
     var workspacePath: String
@@ -285,23 +287,42 @@ final class AppModel {
         saveSessions()
         showTerminal?()
     }
-    private func makeSession(kind: AgentKind, executable: String, directory: URL, resume: Bool, extra: [String] = []) -> TerminalSession {
+    private func makeSession(kind: AgentKind, executable: String, directory: URL, resume: Bool,
+                             conversation: String? = nil, extra: [String] = []) -> TerminalSession {
         var arguments: [String] = [], environment: [String: String] = [:]
-        if kind == .claude, claudeUsage.enabled, let helper = Bundle.main.executablePath {
-            arguments = ["--settings", ClaudeStatusLine.settingsJSON(executable: helper)]
-            environment[ClaudeStatusLine.chainVariable] = ClaudeStatusLine.userCommand(workspace: directory) ?? ""
+        if let helper = Bundle.main.executablePath {
+            switch kind {
+            case .claude:
+                // Hooks give exact "working / finished / needs you" and the conversation id.
+                arguments = ["--settings", ClaudeStatusLine.settingsJSON(executable: helper, statusLine: claudeUsage.enabled, hooks: true)]
+                if claudeUsage.enabled {
+                    environment[ClaudeStatusLine.chainVariable] = ClaudeStatusLine.userCommand(workspace: directory) ?? ""
+                }
+            case .codex:
+                arguments = ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
+                let config = (try? String(contentsOf: FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".codex/config.toml"), encoding: .utf8)) ?? ""
+                if let own = AgentEvents.userCodexNotify(configText: config),
+                   let data = try? JSONSerialization.data(withJSONObject: own) {
+                    environment[AgentEvents.codexChainVariable] = String(decoding: data, as: UTF8.self)
+                }
+            case .shell, .gemini: break
+            }
         }
-        if resume { arguments += SessionRestore.resumeArguments(for: kind) }
+        if resume { arguments += SessionRestore.resumeArguments(for: kind, conversation: conversation) }
         arguments += extra
         let session = TerminalSession(kind: kind, directory: directory, executable: executable, fontSize: fontSize,
                                       arguments: arguments, environment: environment)
+        session.conversationID = conversation
         session.apply(appearance)
         return session
     }
     /// Remembers open sessions (not ones the user already ended) for the next launch.
     func saveSessions() {
         guard restoreSessions else { defaults.removeObject(forKey: "savedSessions"); return }
-        let open = sessions.filter { !$0.ended }.map { SavedSession(kind: $0.kind, path: $0.initialDirectory.path) }
+        let open = sessions.filter { !$0.ended }.map {
+            SavedSession(kind: $0.kind, path: $0.initialDirectory.path, conversation: $0.conversationID)
+        }
         if let data = try? JSONEncoder().encode(open) { defaults.set(data, forKey: "savedSessions") }
     }
     /// Recreates last time's tabs. Each starts when opened; the first Claude/Codex tab of a
@@ -312,9 +333,37 @@ final class AppModel {
         for plan in SessionRestore.plan(saved) where sessions.count < 8 {
             guard SavedWorkspace(path: plan.session.path).exists, let executable = executable(for: plan.session.kind) else { continue }
             sessions.append(makeSession(kind: plan.session.kind, executable: executable,
-                                        directory: URL(fileURLWithPath: plan.session.path), resume: plan.resume))
+                                        directory: URL(fileURLWithPath: plan.session.path), resume: plan.resume,
+                                        conversation: plan.session.conversation))
         }
         selectedID = visibleSessions.last?.id
+    }
+    /// A hook or notify event from a CLI running in one of our sessions.
+    func handleAgentEvent(session id: String, event: String, conversation: String, now: Date = Date()) {
+        guard let session = sessions.first(where: { $0.id.uuidString == id }) else { return }
+        let before = session.conversationID
+        session.receive(AgentEvent(rawValue: event), conversation: conversation.isEmpty ? nil : conversation, now: now)
+        if session.conversationID != before { saveSessions() }
+    }
+    /// ⌘1–⌘8 pick a tab, ⇧⌘] / ⇧⌘[ step through tabs, ⌘T opens another session of the same kind.
+    /// Returns false for keys it does not handle, so they reach the terminal.
+    func handleTabShortcut(key: String, shift: Bool) -> Bool {
+        let tabs = visibleSessions
+        if !shift, let number = Int(key), (1...8).contains(number) {
+            guard number <= tabs.count else { return true }
+            selectedID = tabs[number - 1].id; return true
+        }
+        if shift, key == "]" || key == "[" || key == "}" || key == "{" {
+            guard !tabs.isEmpty else { return true }
+            let current = tabs.firstIndex { $0.id == selectedID } ?? 0
+            let step = key == "]" || key == "}" ? 1 : -1
+            selectedID = tabs[(current + step + tabs.count) % tabs.count].id
+            return true
+        }
+        if !shift, key == "t" {
+            launch(selected?.kind ?? .shell); return true
+        }
+        return false
     }
     func select(_ session: TerminalSession) { selectedID = session.id; showTerminal?() }
     func closeSession(_ session: TerminalSession) {

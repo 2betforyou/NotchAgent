@@ -36,4 +36,10 @@ final class NotchStatusTests: XCTestCase {
         model.tickActivity()
         XCTAssertEqual(model.notchStatus, .attention(.bell))
     }
+    func testPointerIsSampledFastOnlyWhenItMatters() {
+        XCTAssertEqual(PointerPolling.interval(near: false, phase: .closed, pending: false), PointerPolling.slow)
+        XCTAssertEqual(PointerPolling.interval(near: true, phase: .closed, pending: false), PointerPolling.fast)
+        XCTAssertEqual(PointerPolling.interval(near: false, phase: .preview, pending: false), PointerPolling.fast)
+        XCTAssertEqual(PointerPolling.interval(near: false, phase: .closed, pending: true), PointerPolling.fast, "hover/leave delays stay precise")
+    }
 }

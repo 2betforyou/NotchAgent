@@ -3,14 +3,12 @@ import XCTest
 
 @MainActor
 final class NotchBannerTests: XCTestCase {
-    private var saved: (Any?, Any?)!
-    override func setUp() async throws {
-        let d = UserDefaults.standard
-        saved = (d.object(forKey: "workspace"), d.object(forKey: "workspaces"))
-    }
+    // The test host shares the app's defaults; never leave the user's settings changed.
+    private let keys = ["workspace", "workspaces", "notifyEnabled"]
+    private var saved: [Any?] = []
+    override func setUp() async throws { saved = keys.map { UserDefaults.standard.object(forKey: $0) } }
     override func tearDown() async throws {
-        UserDefaults.standard.set(saved.0, forKey: "workspace")
-        UserDefaults.standard.set(saved.1, forKey: "workspaces")
+        for (key, value) in zip(keys, saved) { UserDefaults.standard.set(value, forKey: key) }
     }
     private let t0 = Date(timeIntervalSince1970: 5_000)
     private func model(with sessions: [TerminalSession]) -> AppModel {

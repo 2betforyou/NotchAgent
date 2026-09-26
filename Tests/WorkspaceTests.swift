@@ -98,6 +98,7 @@ final class WorkspaceTests: XCTestCase {
         defer { d.set(saved.0, forKey: "workspace"); d.set(saved.1, forKey: "workspaces") }
         let a = "/tmp/NotchAgentA", b = "/tmp/NotchAgentB"
         let model = AppModel()
+        AppLanguage.current = .korean // AppModel() applies the saved language; pin it after
         model.workspaces = [SavedWorkspace(path: a), SavedWorkspace(path: b)]
         let a1 = TerminalSession(kind: .codex, directory: URL(fileURLWithPath: a), executable: "/bin/zsh", fontSize: 13)
         let a2 = TerminalSession(kind: .shell, directory: URL(fileURLWithPath: a), executable: "/bin/zsh", fontSize: 13)

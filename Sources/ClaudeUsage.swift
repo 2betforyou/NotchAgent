@@ -15,13 +15,17 @@ enum ClaudeStatusLine {
         return base.appendingPathComponent("claude-rate-limits.json")
     }
 
-    /// `--settings` value for `claude`, overriding the status line for this session only.
-    static func settingsJSON(executable: String) -> String {
-        let command = ShellSafety.quote(executable) + " " + argument
-        let data = try! JSONSerialization.data(withJSONObject: ["statusLine": ["type": "command", "command": command]])
+    /// `--settings` value for `claude` sessions opened in NotchAgent: activity hooks always, and
+    /// the status line helper when Claude usage is on. Applies to that session only.
+    static func settingsJSON(executable: String, statusLine: Bool = true, hooks: Bool = false) -> String {
+        var settings: [String: Any] = [:]
+        if statusLine {
+            settings["statusLine"] = ["type": "command", "command": ShellSafety.quote(executable) + " " + argument]
+        }
+        if hooks { settings["hooks"] = AgentEvents.claudeHooks(executable: executable) }
+        let data = try! JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
         return String(decoding: data, as: UTF8.self)
     }
-
     /// The status line the user configured for this folder (local > project > user settings).
     static func userCommand(workspace: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
         let files = [workspace.appendingPathComponent(".claude/settings.local.json"),
