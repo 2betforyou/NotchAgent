@@ -6,7 +6,7 @@
 
 NotchAgent is a macOS app that lives in the camera notch at the top center of the menu bar. Hover over the notch for a preview; click it or press `⌃⌥Space` and a full terminal unfolds right there. Run agents like Codex, Claude Code, and Gemini CLI with your usual setup, and they keep working while the notch is collapsed.
 
-![NotchAgent preview: usage and recent activity](docs/images/hero.png)
+![NotchAgent preview: usage and recent activity](docs/images/en/hero.png)
 
 _Rendered from the app's UI with sample data._
 
@@ -19,7 +19,7 @@ _Rendered from the app's UI with sample data._
 - **Drag and drop files and folders**: Drop a file or image into the terminal to insert its path. Drop a folder on the notch, the preview, or the top of the expanded view to add it as a work folder and switch to it.
 - **Live status in the notch**: The collapsed notch shows status with symbols only, no text. With no sessions, each side shows an agent's remaining quota (a white gauge that turns red at 20% or less; with usage display off, only the notch shows). With one session, the agent icon sits on the left and a status symbol on the right (working `•••`, then elapsed time after a minute; finished green ✓; needs you amber 🔔; exited with an error red ✕; low-quota gauge). With several sessions, icons are split across both sides with a colored ring around each (spinning white = working, green = finished, amber = needs you, red = error, no ring = quiet). When a session you aren't looking at finishes or asks for input, a short notice drops below the notch, Dynamic Island style. Claude Code and Codex report precisely through each CLI's official signals (Claude hooks, Codex `notify`); other sessions are judged by their output.
 
-  ![Collapsed notch states: idle, working, finished, needs you, several sessions](docs/images/notch-states.png)
+  ![Collapsed notch states: idle, working, finished, needs you, several sessions](docs/images/en/notch-states.png)
 
 - **Quick ask**: Pick an agent in the preview, type a request, and a session starts in the current folder with that request. If it can't start (session limit, CLI path, or folder issue), your text is kept.
 - **Recent activity**: Below the one-line usage in the preview, see missed completions, requests for input, and ended sessions. Click one to jump to its session; activity from the last 24 hours survives relaunches. macOS Notification Center and a short sound are optional, and notification titles and folders are hidden by default.
@@ -32,7 +32,7 @@ _Rendered from the app's UI with sample data._
 
 ### Workspace
 
-![NotchAgent workspace: folders, session tabs, terminal](docs/images/workspace.png)
+![NotchAgent workspace: folders, session tabs, terminal](docs/images/en/workspace.png)
 
 _Rendered from the app's UI with sample data._
 
