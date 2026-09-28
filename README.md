@@ -47,6 +47,8 @@ _Rendered from the app's UI with sample data._
 
 Download the latest DMG from [Releases](../../releases), move `NotchAgent.app` to your Applications folder, and open it.
 
+The current builds aren't notarized by Apple yet, so macOS blocks the first launch. Open the app once, then go to System Settings → Privacy & Security and click **Open Anyway** next to NotchAgent. You only need to do this once.
+
 ### Build from source
 
 Requires Xcode 16 or later. Dependencies are vendored, so it builds without a network connection.
