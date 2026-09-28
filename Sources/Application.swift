@@ -21,7 +21,7 @@ enum NotchAgentApp {
 
 final class IslandPanel: NSPanel {
     var acceptsKeyboard = false
-    /// Tab shortcuts (⌘1–8, ⇧⌘[ ], ⌘T) handled before the terminal sees the key.
+    /// Tab and attention shortcuts (⌘1–8, ⇧⌘[ ], ⌘T, ⇧⌘A) handled before the terminal sees the key.
     var onTabShortcut: ((String, Bool) -> Bool)?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
@@ -35,7 +35,7 @@ final class IslandPanel: NSPanel {
     private static func usKey(_ event: NSEvent) -> String? {
         switch Int(event.keyCode) {
         case 18: "1"; case 19: "2"; case 20: "3"; case 21: "4"; case 23: "5"; case 22: "6"; case 26: "7"; case 28: "8"
-        case 17: "t"; case 30: "]"; case 33: "["
+        case 0: "a"; case 17: "t"; case 30: "]"; case 33: "["
         default: nil
         }
     }
@@ -104,8 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notifications.openSession = { [weak self] id in self?.model.openSession(id: id) }
         model.activityOccurred = { [weak self] activity in
             guard let self else { return }
+            guard self.model.shouldDeliverActivity(activity.reason) else { return }
             self.activityNotifications?.deliver(activity, notification: self.model.systemNotificationsEnabled,
-                                                 sound: self.model.activitySoundEnabled)
+                                                 sound: self.model.activitySoundEnabled,
+                                                 showsDetails: self.model.showNotificationDetails)
         }
         model.notificationSettingsChanged = { [weak self] enabled in
             guard let self else { return }
@@ -288,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
         return alert.runModal()
     }
-    @objc func toggle() { model.phase == .terminal ? collapse() : expand() }
+    @objc func toggle() { model.phase == .terminal ? collapse() : model.openPriorityOrTerminal() }
     @objc private func displaysChanged() { positionPanel() }
     @objc private func screenLocked() { locked = true; collapse(); panel.orderOut(nil) }
     @objc private func screenUnlocked() { locked = false; positionPanel(); panel.orderFrontRegardless() }
@@ -390,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if busy > 0 {
             let alert = NSAlert()
             alert.messageText = L("NotchAgent를 종료할까요?", "Quit NotchAgent?")
-            alert.informativeText = L("\(busy)개의 세션에서 입력 중인 내용이나 진행 중인 작업이 사라질 수 있습니다.", "Unsubmitted input or work in progress may be lost in \(busy) session(s).")
+            alert.informativeText = L("\(busy)개의 세션에서 입력 중인 내용이나 진행 중인 작업이 사라질 수 있습니다.", "Unsubmitted input or work in progress may be lost in \(sessionCount(busy)).")
             alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("종료", "Quit"))
             if runAlert(alert) != .alertSecondButtonReturn { return .terminateCancel }
         }

@@ -22,6 +22,7 @@ final class ReadmeImagesTests: XCTestCase {
         defaults = UserDefaults(suiteName: suite) // never the user's real settings
         scratch = FileManager.default.temporaryDirectory.appendingPathComponent("NotchAgentReadme-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        for folder in folders { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
     }
     override func tearDown() async throws {
         TerminalSession.stopAll(sessions, grace: 0.2)
@@ -32,7 +33,8 @@ final class ReadmeImagesTests: XCTestCase {
 
     // MARK: Sample data
 
-    private let folders = ["my-app", "website", "notes"].map { "/Users/me/Projects/" + $0 }
+    /// Real (empty) folders in the scratch dir, so chips show folder icons, not "missing" marks.
+    private var folders: [String] { ["my-app", "website", "notes"].map { scratch.appendingPathComponent("Projects/" + $0).path } }
     private func quota(_ fiveHourUsed: Double, _ weekUsed: Double) -> UsageSnapshot {
         let now = Date()
         return UsageSnapshot(windows: [
@@ -44,7 +46,7 @@ final class ReadmeImagesTests: XCTestCase {
         let codex = UsageService(snapshot: quota(32, 58))
         codex.enabled = true
         let model = AppModel(defaults: defaults, usage: codex)
-        AppLanguage.current = .korean
+        AppLanguage.current = .english
         let now = Date().timeIntervalSince1970
         ClaudeStatusLine.record(["five_hour": ["used_percentage": 23, "resets_at": now + 9000],
                                  "seven_day": ["used_percentage": 41, "resets_at": now + 400_000]])
@@ -114,11 +116,11 @@ final class ReadmeImagesTests: XCTestCase {
         NSColor(white: 0.08, alpha: 0.55).setFill()
         NSRect(x: 0, y: top - 32, width: width, height: 32).fill()
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor(white: 1, alpha: 0.85)]
-        ("파일      편집      보기      윈도우      도움말" as NSString).draw(at: NSPoint(x: 22, y: top - 24), withAttributes: attrs)
-        ("월 9:41" as NSString).draw(at: NSPoint(x: width - 70, y: top - 24), withAttributes: attrs)
+        ("File      Edit      View      Window      Help" as NSString).draw(at: NSPoint(x: 22, y: top - 24), withAttributes: attrs)
+        ("Mon 9:41" as NSString).draw(at: NSPoint(x: width - 84, y: top - 24), withAttributes: attrs)
         let icon = MenuBarIcon.make()
         let tinted = NSImage(size: icon.size, flipped: false) { r in icon.draw(in: r); NSColor(white: 1, alpha: 0.85).set(); r.fill(using: .sourceAtop); return true }
-        tinted.draw(in: NSRect(x: width - 104, y: top - 25, width: 18, height: 18))
+        tinted.draw(in: NSRect(x: width - 118, y: top - 25, width: 18, height: 18))
     }
 
     // MARK: Images
@@ -132,9 +134,9 @@ final class ReadmeImagesTests: XCTestCase {
     /// Menu bar with the preview open beneath the notch.
     private func heroImage() throws {
         let model = makeModel()
-        let tab = try session(.claude, folder: folders[0], title: "로그인 폼 검증")
+        let tab = try session(.claude, folder: folders[0], title: "Login form validation")
         tab.start()
-        let other = try session(.codex, folder: folders[1], title: "빌드 오류 수정")
+        let other = try session(.codex, folder: folders[1], title: "Fix build error")
         other.start()
         model.sessions = [tab, other]
         model.selectedID = tab.id
@@ -142,7 +144,7 @@ final class ReadmeImagesTests: XCTestCase {
         model.recordActivity(.bell, for: tab, now: Date().addingTimeInterval(-40))
         model.phase = .preview
         let island = try render(IslandView(model: model), size: CGSize(width: model.panelWidth + 32, height: model.hostHeight + 32), settle: 1.2)
-        let size = CGSize(width: 1200, height: 660)
+        let size = CGSize(width: 1512, height: 416)
         let image = canvas(size) {
             wallpaper(NSRect(origin: .zero, size: size))
             menuBar(width: size.width, top: size.height)
@@ -159,23 +161,29 @@ final class ReadmeImagesTests: XCTestCase {
             let model = makeModel()
             try setup(model)
             model.phase = .closed
-            rows.append((label, note, try render(IslandView(model: model), size: CGSize(width: 972, height: 44))))
+            // IslandView has a fixed, top-aligned frame; render it whole and keep the top strip.
+            let full = try render(IslandView(model: model), size: CGSize(width: model.panelWidth + 32, height: model.hostHeight + 32))
+            let strip = NSImage(size: CGSize(width: full.size.width, height: 44), flipped: false) { rect in
+                full.draw(in: rect, from: NSRect(x: 0, y: full.size.height - 44, width: full.size.width, height: 44), operation: .copy, fraction: 1)
+                return true
+            }
+            rows.append((label, note, strip))
         }
-        try closed("대기", "에이전트별 남은 사용량") { _ in }
-        try closed("작업 중", "경과 시간 (1분 전까지는 •••)") { m in
-            let s = try session(.claude, folder: folders[0], title: "작업"); s.start()
+        try closed("Idle", "Remaining quota per agent") { _ in }
+        try closed("Working", "Elapsed time (••• for the first minute)") { m in
+            let s = try session(.claude, folder: folders[0], title: "task"); s.start()
             for x in stride(from: 150.0, through: 0, by: -1.5) { s.recordOutput(at: Date().addingTimeInterval(-x)) }
             _ = s.tick(now: Date(), visible: false); m.sessions = [s]
         }
-        try closed("완료", "초록 ✓") { m in
-            let s = try session(.codex, folder: folders[0], title: "작업"); s.start()
+        try closed("Finished", "Green ✓") { m in
+            let s = try session(.codex, folder: folders[0], title: "task"); s.start()
             s.receive(.finished, conversation: nil, now: Date()); _ = s.tick(now: Date(), visible: false); m.sessions = [s]
         }
-        try closed("확인 요청", "호박 🔔") { m in
-            let s = try session(.claude, folder: folders[0], title: "작업"); s.start()
+        try closed("Needs you", "Amber 🔔") { m in
+            let s = try session(.claude, folder: folders[0], title: "task"); s.start()
             s.terminal.onBell?(); _ = s.tick(now: Date(), visible: false); m.sessions = [s]
         }
-        try closed("여러 세션", "색 고리: 흰색 작업 중 · 초록 완료 · 호박 확인 요청 · 없음 조용함") { m in
+        try closed("Several sessions", "Rings: white working · green finished · amber needs you · none quiet") { m in
             let a = try session(.claude, folder: folders[0], title: "a"), b = try session(.codex, folder: folders[1], title: "b")
             let c = try session(.claude, folder: folders[2], title: "c"), d = try session(.shell, folder: folders[0], title: "d")
             [a, b, c, d].forEach { $0.start() }
@@ -184,7 +192,7 @@ final class ReadmeImagesTests: XCTestCase {
             c.terminal.onBell?(); _ = c.tick(now: Date(), visible: false)
             m.sessions = [a, b, c, d]
         }
-        let rowHeight: CGFloat = 64, width: CGFloat = 1200
+        let rowHeight: CGFloat = 64, width: CGFloat = 1512
         let size = CGSize(width: width, height: rowHeight * CGFloat(rows.count) + 24)
         let image = canvas(size) {
             wallpaper(NSRect(origin: .zero, size: size))
@@ -204,28 +212,28 @@ final class ReadmeImagesTests: XCTestCase {
     private func terminalImage() throws {
         let model = makeModel()
         let transcript = [
-            "\\033[1m> 로그인 폼에 이메일 형식 검사를 추가해 줘\\033[0m\\r\\n\\r\\n",
-            "\\033[38;5;173m●\\033[0m LoginForm에 이메일 검사를 추가하고 테스트를 실행하겠습니다.\\r\\n\\r\\n",
+            "\\033[1m> Add email format validation to the login form\\033[0m\\r\\n\\r\\n",
+            "\\033[38;5;173m●\\033[0m I'll add email validation to LoginForm and run the tests.\\r\\n\\r\\n",
             "\\033[2m  ⎿ Read\\033[0m src/components/LoginForm.tsx\\r\\n",
             "\\033[2m  ⎿ Edit\\033[0m src/components/LoginForm.tsx \\033[32m+18\\033[0m \\033[31m-2\\033[0m\\r\\n",
             "\\033[2m  ⎿ Run\\033[0m  npm test -- LoginForm\\r\\n",
             "\\033[32m     ✓ 12 passed\\033[0m\\r\\n\\r\\n",
-            "\\033[38;5;173m●\\033[0m 이메일 형식이 맞지 않으면 입력란 아래에 안내가 보입니다. 테스트 12개가 모두 통과했습니다.\\r\\n\\r\\n",
+            "\\033[38;5;173m●\\033[0m Invalid emails now show a hint under the field. All 12 tests pass.\\r\\n\\r\\n",
             "\\033[1m> \\033[0m"
         ].joined()
-        let main = try session(.claude, folder: folders[0], title: "로그인 폼 검증", printing: transcript)
-        let second = try session(.codex, folder: folders[0], title: "API 문서 정리")
+        let main = try session(.claude, folder: folders[0], title: "Login form validation", printing: transcript)
+        let second = try session(.codex, folder: folders[0], title: "Tidy API docs")
         let shell = try session(.shell, folder: folders[0], title: "dev server")
         second.start(); shell.start()
         model.sessions = [main, second, shell]
         model.selectedID = main.id
         model.phase = .terminal
         let image = try render(IslandView(model: model), size: CGSize(width: model.panelWidth + 32, height: model.hostHeight + 32), settle: 2.0)
-        let size = CGSize(width: image.size.width + 80, height: image.size.height + 20)
+        let size = CGSize(width: 1512, height: image.size.height + 20)
         let framed = canvas(size) {
             wallpaper(NSRect(origin: .zero, size: size))
             menuBar(width: size.width, top: size.height)
-            image.draw(in: NSRect(x: 40, y: size.height - image.size.height, width: image.size.width, height: image.size.height))
+            image.draw(in: NSRect(x: (size.width - image.size.width) / 2, y: size.height - image.size.height, width: image.size.width, height: image.size.height))
         }
         try save(framed, "workspace.png")
     }

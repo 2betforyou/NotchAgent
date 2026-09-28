@@ -115,7 +115,7 @@ enum HoverSpeed: String, CaseIterable, Identifiable {
     var label: String { name + " · " + (delay * 1000).formatted(.number.precision(.fractionLength(0))) + "ms" }
 }
 
-enum AttentionReason: Equatable {
+enum AttentionReason: String, Codable, Equatable {
     /// `exited` is a clean exit (code 0); `failed` is a non-zero exit or a crash.
     case finished, bell, exited, failed
     /// Which one to show when several sessions want attention: a question beats an error,
@@ -285,7 +285,7 @@ struct NotchBanner: Equatable {
     let shownAt: Date
 }
 
-struct RecentActivity: Identifiable, Equatable {
+struct RecentActivity: Identifiable, Codable, Equatable {
     let id: UUID
     let sessionID: UUID
     let kind: AgentKind

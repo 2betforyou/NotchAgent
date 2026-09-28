@@ -51,11 +51,22 @@ final class AppModel {
         didSet { defaults.set(systemNotificationsEnabled, forKey: "systemNotificationsEnabled"); notificationSettingsChanged?(systemNotificationsEnabled) }
     }
     var activitySoundEnabled: Bool { didSet { defaults.set(activitySoundEnabled, forKey: "activitySoundEnabled") } }
+    var showNotificationDetails: Bool { didSet { defaults.set(showNotificationDetails, forKey: "showNotificationDetails") } }
+    var notifyForCompletion: Bool { didSet { defaults.set(notifyForCompletion, forKey: "notifyForCompletion") } }
+    var notifyForNeedsInput: Bool { didSet { defaults.set(notifyForNeedsInput, forKey: "notifyForNeedsInput") } }
+    var notifyForSessionEnd: Bool { didSet { defaults.set(notifyForSessionEnd, forKey: "notifyForSessionEnd") } }
+    var keepRecentActivities: Bool {
+        didSet {
+            defaults.set(keepRecentActivities, forKey: "keepRecentActivities")
+            saveRecentActivities()
+        }
+    }
     var notificationPermissionMessage: String?
     @ObservationIgnored var notificationSettingsChanged: ((Bool) -> Void)?
     @ObservationIgnored var activityOccurred: ((RecentActivity) -> Void)?
     private(set) var recentActivities: [RecentActivity] = []
     static let activityLimit = 50
+    static let activityRetention: TimeInterval = 24 * 60 * 60
     var unreadActivityCount: Int { recentActivities.filter { !$0.isRead }.count }
     var restoreSessions: Bool {
         didSet { defaults.set(restoreSessions, forKey: "restoreSessions"); saveSessions() }
@@ -89,6 +100,11 @@ final class AppModel {
         notifyEnabled = d.object(forKey: "notifyEnabled") as? Bool ?? true
         systemNotificationsEnabled = d.bool(forKey: "systemNotificationsEnabled")
         activitySoundEnabled = d.bool(forKey: "activitySoundEnabled")
+        showNotificationDetails = d.bool(forKey: "showNotificationDetails")
+        notifyForCompletion = d.object(forKey: "notifyForCompletion") as? Bool ?? true
+        notifyForNeedsInput = d.object(forKey: "notifyForNeedsInput") as? Bool ?? true
+        notifyForSessionEnd = d.object(forKey: "notifyForSessionEnd") as? Bool ?? true
+        keepRecentActivities = d.object(forKey: "keepRecentActivities") as? Bool ?? true
         showsNewSessionButtons = d.object(forKey: "showsNewSessionButtons") as? Bool ?? true
         quickAgent = d.string(forKey: "quickAgent").flatMap(AgentKind.init(rawValue:)).flatMap { $0 == .shell ? nil : $0 } ?? .claude
         hotkey = d.data(forKey: "hotkey").flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) } ?? .default
@@ -96,6 +112,13 @@ final class AppModel {
         let decode = { (key: String) in d.data(forKey: key).flatMap { try? JSONDecoder().decode([SavedWorkspace].self, from: $0) } }
         workspacePath = Workspaces.normalize(workspacePath)
         workspaces = Workspaces.migrate(saved: decode("workspaces"), recent: decode("recentWorkspaces") ?? [], active: workspacePath)
+        if keepRecentActivities, let data = d.data(forKey: "recentActivities") {
+            if let saved = try? JSONDecoder().decode([RecentActivity].self, from: data) {
+                let cutoff = Date().addingTimeInterval(-Self.activityRetention)
+                recentActivities = Array(saved.filter { $0.date >= cutoff }.prefix(Self.activityLimit))
+                saveRecentActivities()
+            } else { d.removeObject(forKey: "recentActivities") }
+        }
         Accent.current = accent
         AppLanguage.current = language
     }
@@ -106,6 +129,25 @@ final class AppModel {
     }
     var hostHeight: CGFloat { max(panelHeight, previewHeight) }
     var attentionCount: Int { sessions.filter { $0.attention != nil }.count }
+    var prioritySession: TerminalSession? {
+        sessions.filter { $0.attention != nil }.max { left, right in
+            let leftPriority = left.attention?.priority ?? 0
+            let rightPriority = right.attention?.priority ?? 0
+            if leftPriority != rightPriority { return leftPriority < rightPriority }
+            let leftDate = recentActivities.first { $0.sessionID == left.id }?.date ?? .distantPast
+            let rightDate = recentActivities.first { $0.sessionID == right.id }?.date ?? .distantPast
+            return leftDate < rightDate
+        }
+    }
+    @discardableResult func openPrioritySession() -> Bool {
+        guard let session = prioritySession else { return false }
+        banner = nil
+        openSession(id: session.id)
+        return true
+    }
+    func openPriorityOrTerminal() {
+        if !openPrioritySession() { showTerminal?() }
+    }
     /// The most important unseen event among a folder's sessions.
     func attention(in path: String) -> AttentionReason? {
         sessions.filter { Workspaces.normalize($0.initialDirectory.path) == path }
@@ -124,7 +166,7 @@ final class AppModel {
     var previewHeadline: String {
         let here = runningCount(in: workspacePath)
         return here == 0 ? L("작업은 가까이. 화면은 여유롭게.", "Work close by. Screen kept clear.")
-                         : L("\(here)개의 세션이 열려 있어요.", "\(here) session(s) open.")
+                         : L("\(here)개의 세션이 열려 있어요.", "\(sessionCount(here)) open.")
     }
     var previewSubtitle: String {
         if let session = selected, visibleSessions.contains(where: { $0.id == session.id }) {
@@ -161,6 +203,11 @@ final class AppModel {
     static let bannerDuration: TimeInterval = 4.5
     /// Called once a second: updates working state and raises notices for unseen sessions.
     func tickActivity(now: Date = Date(), terminalIsVisible: Bool = true) {
+        let cutoff = Date().addingTimeInterval(-Self.activityRetention)
+        if recentActivities.contains(where: { $0.date < cutoff }) {
+            recentActivities.removeAll { $0.date < cutoff }
+            saveRecentActivities()
+        }
         for session in sessions {
             let visible = terminalIsVisible && phase == .terminal && session.id == selectedID
             if visible { markActivitiesRead(for: session.id) }
@@ -183,14 +230,40 @@ final class AppModel {
                                       folder: session.initialDirectory.lastPathComponent, reason: reason, date: now)
         recentActivities.insert(activity, at: 0)
         if recentActivities.count > Self.activityLimit { recentActivities.removeLast(recentActivities.count - Self.activityLimit) }
+        saveRecentActivities()
         activityOccurred?(activity)
     }
     func markActivitiesRead(for sessionID: UUID) {
+        var changed = false
         for index in recentActivities.indices where recentActivities[index].sessionID == sessionID && !recentActivities[index].isRead {
             recentActivities[index].isRead = true
+            changed = true
+        }
+        if changed { saveRecentActivities() }
+    }
+    func markActivityRead(id: UUID) {
+        guard let index = recentActivities.firstIndex(where: { $0.id == id }), !recentActivities[index].isRead else { return }
+        recentActivities[index].isRead = true
+        saveRecentActivities()
+    }
+    func clearRecentActivities() {
+        recentActivities.removeAll()
+        defaults.removeObject(forKey: "recentActivities")
+    }
+    private func saveRecentActivities() {
+        guard keepRecentActivities else { defaults.removeObject(forKey: "recentActivities"); return }
+        let cutoff = Date().addingTimeInterval(-Self.activityRetention)
+        let retained = recentActivities.filter { $0.date >= cutoff }
+        if retained.isEmpty { defaults.removeObject(forKey: "recentActivities") }
+        else if let data = try? JSONEncoder().encode(retained) { defaults.set(data, forKey: "recentActivities") }
+    }
+    func shouldDeliverActivity(_ reason: AttentionReason) -> Bool {
+        switch reason {
+        case .finished: notifyForCompletion
+        case .bell: notifyForNeedsInput
+        case .exited, .failed: notifyForSessionEnd
         }
     }
-    func clearRecentActivities() { recentActivities.removeAll() }
     func openSession(id: UUID) {
         guard let session = sessions.first(where: { $0.id == id }) else {
             lastError = L("이 알림의 세션은 이미 닫혔습니다.", "The session for this notification has already been closed.")
@@ -259,7 +332,7 @@ final class AppModel {
         if running > 0 {
             let alert = NSAlert()
             alert.messageText = L("이 작업 폴더를 목록에서 제거할까요?", "Remove this folder from the list?")
-            alert.informativeText = L("이 폴더에서 실행 중인 \(running)개의 세션이 종료됩니다. 폴더와 파일은 삭제되지 않습니다.", "\(running) running session(s) in this folder will end. The folder and its files are not deleted.")
+            alert.informativeText = L("이 폴더에서 실행 중인 \(running)개의 세션이 종료됩니다. 폴더와 파일은 삭제되지 않습니다.", "\(sessionCount(running, "running")) in this folder will end. The folder and its files are not deleted.")
             alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("세션 종료 후 제거", "End Sessions and Remove"))
             guard (runAlert?(alert) ?? alert.runModal()) == .alertSecondButtonReturn else { return }
         }
@@ -318,7 +391,7 @@ final class AppModel {
         let alert = NSAlert()
         alert.messageText = L("이 worktree를 제거할까요?", "Remove this worktree?")
         alert.informativeText = L("\(URL(fileURLWithPath: path).lastPathComponent) 작업 폴더를 지웁니다. 브랜치와 커밋은 저장소에 남고, 커밋하지 않은 변경이 있으면 제거하지 않습니다.", "Deletes the \(URL(fileURLWithPath: path).lastPathComponent) folder. The branch and its commits stay in the repository, and nothing is removed if there are uncommitted changes.")
-            + (running > 0 ? L(" 실행 중인 \(running)개의 세션이 종료됩니다.", " \(running) running session(s) will end.") : "")
+            + (running > 0 ? L(" 실행 중인 \(running)개의 세션이 종료됩니다.", " \(sessionCount(running, "running")) will end.") : "")
         alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("worktree 제거", "Remove Worktree"))
         guard (runAlert?(alert) ?? alert.runModal()) == .alertSecondButtonReturn else { return }
         Task { await finishRemovingWorktree(path) }
@@ -347,29 +420,31 @@ final class AppModel {
     private func saveWorkspaces() {
         if let data = try? JSONEncoder().encode(workspaces) { defaults.set(data, forKey: "workspaces") }
     }
-    func submitQuickPrompt(_ prompt: String) {
+    @discardableResult func submitQuickPrompt(_ prompt: String) -> Bool {
+        guard launch(quickAgent, prompt: prompt) else { return false }
         quickPromptActive = false
-        launch(quickAgent, prompt: prompt)
+        return true
     }
     func cancelQuickPrompt() {
         quickPromptActive = false
         collapse?()
     }
-    func launch(_ kind: AgentKind, prompt: String? = nil) {
-        guard sessions.count < 8 else { lastError = L("최대 8개 세션을 열 수 있습니다. 사용하지 않는 세션을 닫아주세요.", "Up to 8 sessions can be open. Close one you no longer need."); return }
+    @discardableResult func launch(_ kind: AgentKind, prompt: String? = nil) -> Bool {
+        guard sessions.count < 8 else { lastError = L("최대 8개 세션을 열 수 있습니다. 사용하지 않는 세션을 닫아주세요.", "Up to 8 sessions can be open. Close one you no longer need."); return false }
         guard let executable = executable(for: kind) else {
             lastError = L("\(kind.name) 실행 파일을 찾을 수 없습니다. 설정에서 경로를 지정하세요.", "\(kind.name) was not found. Set its path in Settings.")
-            return
+            return false
         }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
-            lastError = L("작업 폴더가 없습니다. 다른 폴더를 선택하세요.", "The work folder no longer exists. Choose another folder."); return
+            lastError = L("작업 폴더가 없습니다. 다른 폴더를 선택하세요.", "The work folder no longer exists. Choose another folder."); return false
         }
         let session = makeSession(kind: kind, executable: executable, directory: URL(fileURLWithPath: workspacePath), resume: false,
                                   extra: prompt.map { SessionRestore.initialPromptArguments(for: kind, prompt: $0) } ?? [])
         sessions.append(session); selectedID = session.id; lastError = nil
         saveSessions()
         showTerminal?()
+        return true
     }
     private func makeSession(kind: AgentKind, executable: String, directory: URL, resume: Bool,
                              conversation: String? = nil, title: String? = nil, customTitle: String? = nil,
@@ -442,6 +517,7 @@ final class AppModel {
     /// ⌘1–⌘8 pick a tab, ⇧⌘] / ⇧⌘[ step through tabs, ⌘T opens another session of the same kind.
     /// Returns false for keys it does not handle, so they reach the terminal.
     func handleTabShortcut(key: String, shift: Bool) -> Bool {
+        if shift, key == "a" { return openPrioritySession() }
         let tabs = visibleSessions
         if !shift, let number = Int(key), (1...8).contains(number) {
             guard number <= tabs.count else { return true }

@@ -1,6 +1,16 @@
 import AppKit
 import UserNotifications
 
+enum ActivityNotificationText {
+    static func title(for activity: RecentActivity) -> String {
+        activity.kind.name + " · " + activity.reason.message
+    }
+    static func body(for activity: RecentActivity, showsDetails: Bool) -> String {
+        guard showsDetails else { return L("자세한 내용은 NotchAgent에서 확인하세요.", "Open NotchAgent for details.") }
+        return activity.title == activity.folder ? activity.folder : activity.title + " · " + activity.folder
+    }
+}
+
 @MainActor
 final class ActivityNotifications: NSObject, UNUserNotificationCenterDelegate {
     var openSession: ((UUID) -> Void)?
@@ -25,14 +35,14 @@ final class ActivityNotifications: NSObject, UNUserNotificationCenterDelegate {
     private var deniedMessage: String {
         L("시스템 설정 → 알림 → NotchAgent에서 알림을 허용하세요.", "Allow notifications in System Settings → Notifications → NotchAgent.")
     }
-    func deliver(_ activity: RecentActivity, notification: Bool, sound: Bool) {
+    func deliver(_ activity: RecentActivity, notification: Bool, sound: Bool, showsDetails: Bool) {
         guard notification && authorized else {
             if sound { NSSound(named: NSSound.Name("Pop"))?.play() }
             return
         }
         let content = UNMutableNotificationContent()
-        content.title = activity.kind.name + " · " + activity.reason.message
-        content.body = activity.title == activity.folder ? activity.folder : activity.title + " · " + activity.folder
+        content.title = ActivityNotificationText.title(for: activity)
+        content.body = ActivityNotificationText.body(for: activity, showsDetails: showsDetails)
         content.userInfo = ["sessionID": activity.sessionID.uuidString]
         if sound { content.sound = .default }
         center.add(UNNotificationRequest(identifier: activity.id.uuidString, content: content, trigger: nil)) { error in

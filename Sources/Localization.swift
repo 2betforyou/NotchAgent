@@ -31,3 +31,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 func L(_ korean: String, _ english: String) -> String {
     AppLanguage.current.resolvesToKorean ? korean : english
 }
+
+/// English count with the right noun form: `sessionCount(1)` → "1 session", `sessionCount(2, "running")` → "2 running sessions".
+func sessionCount(_ count: Int, _ adjective: String = "") -> String {
+    "\(count) " + (adjective.isEmpty ? "" : adjective + " ") + "session" + (count == 1 ? "" : "s")
+}

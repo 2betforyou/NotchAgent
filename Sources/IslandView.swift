@@ -146,7 +146,7 @@ struct IslandView: View {
     }
     private var compact: some View {
         VStack(spacing: 0) {
-            Button { model.showTerminal?() } label: {
+            Button { model.openPriorityOrTerminal() } label: {
                 HStack(spacing: 0) {
                     leftWing.frame(width: model.closedWingWidth)
                     Color.clear.frame(width: model.notchGapWidth) // camera housing
@@ -157,7 +157,7 @@ struct IslandView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(L("NotchAgent 열기, 실행 중인 세션 \(model.runningCount)개", "Open NotchAgent, \(model.runningCount) running session(s)") + (model.attentionCount > 0 ? L(", 확인할 세션 \(model.attentionCount)개", ", \(model.attentionCount) need(s) attention") : ""))
+            .accessibilityLabel(L("NotchAgent 열기, 실행 중인 세션 \(model.runningCount)개", "Open NotchAgent, \(sessionCount(model.runningCount, "running"))") + (model.attentionCount > 0 ? L(", 확인할 세션 \(model.attentionCount)개로 이동", ", open \(sessionCount(model.attentionCount)) needing attention") : ""))
             if let banner = model.banner { bannerRow(banner) }
         }
         .motion(Motion.island, value: model.closedLayout, reduce: reduceMotion)
@@ -725,7 +725,7 @@ struct WorkspaceBar: View {
         }
         .buttonStyle(WorkspaceChipStyle(active: active, highlight: chipHighlight))
         .help(workspace.path + (branch.map { " · " + $0 } ?? "") + (exists ? "" : L(" · 폴더를 찾을 수 없음", " · folder not found")))
-        .accessibilityLabel(L("작업 폴더 \(label)", "Folder \(label)") + (running > 0 ? L(", 실행 중인 세션 \(running)개", ", \(running) running session(s)") : "") + (exists ? "" : L(", 폴더 없음", ", missing")))
+        .accessibilityLabel(L("작업 폴더 \(label)", "Folder \(label)") + (running > 0 ? L(", 실행 중인 세션 \(running)개", ", \(sessionCount(running, "running"))") : "") + (exists ? "" : L(", 폴더 없음", ", missing")))
         .accessibilityAddTraits(active ? .isSelected : [])
         .contextMenu {
             ForEach(AgentKind.allCases) { kind in
@@ -805,8 +805,7 @@ struct QuickPromptField: View {
     private func submit() {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
-        text = ""
-        model.submitQuickPrompt(prompt)
+        if model.submitQuickPrompt(prompt) { text = "" }
     }
 }
 

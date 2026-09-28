@@ -25,7 +25,7 @@ Claude 사용량 표시를 켠 경우에만 `~/Library/Application Support/Notch
 
 NotchAgent는 터미널 입력·출력 본문, 명령 기록, 대화 본문, API 키, 로그인 토큰을 저장하지 않습니다. 탭 제목은 위 세션 복원 정보에 포함됩니다.
 
-최근 활동은 에이전트 종류, 작업 제목, 폴더 이름, 이벤트, 시각, 읽음 상태를 앱 실행 중 메모리에 최대 50개 보관합니다. 앱을 종료하면 비워집니다. 알림 센터를 켜면 이 중 종류·제목·폴더·이벤트를 macOS 로컬 알림으로 전달하며, 알림 기록은 macOS에서 관리합니다.
+최근 활동은 에이전트 종류, 작업 제목, 폴더 이름, 이벤트, 시각, 읽음 상태를 최대 50개·24시간 동안 macOS 환경설정에 로컬로 보관합니다. 보관을 끄거나 목록을 비우면 저장본은 즉시 삭제됩니다. 종료·재실행 후 이전 세션 ID의 활동은 기록으로만 볼 수 있습니다. 알림 센터를 켜면 기본적으로 에이전트 종류와 이벤트만 macOS 로컬 알림으로 전달합니다. 작업 제목·폴더는 사용자가 알림 상세 내용 표시를 켠 경우에만 전달하며, 알림 기록은 macOS에서 관리합니다.
 
 파일 경로가 없는 이미지나 스크린샷을 끌어놓으면 macOS 임시 폴더 아래 `NotchAgent-Drops`에 파일을 받아 경로를 터미널에 입력합니다. Finder 파일은 복사하지 않고 원래 경로를 사용합니다. 임시 파일은 세션이 읽을 수 있도록 유지되며 macOS의 임시 파일 정리 대상입니다. 클립보드는 변경하지 않습니다.
 
@@ -105,7 +105,7 @@ Only with Claude usage display on, the 5-hour and weekly usage percentages and r
 
 NotchAgent never stores terminal input/output bodies, command history, conversation bodies, API keys, or sign-in tokens. Tab titles are included in the restoration metadata above.
 
-Recent activity keeps up to 50 events in memory while the app runs: agent, task title, folder name, event, time, and read state. It clears on quit. If Notification Center is enabled, the agent, title, folder, and event are passed to macOS local notifications; macOS manages that notification history.
+Recent activity stores up to 50 events for 24 hours in local macOS preferences: agent, task title, folder name, event, time, and read state. Turning off retention or clearing the list immediately deletes the saved copy. After a relaunch, events for old session IDs are shown as history only. If Notification Center is enabled, only the agent and event are passed to macOS local notifications by default. Task title and folder are included only when you turn on notification details; macOS manages that notification history.
 
 Dropped images or screenshots without an existing file path are received under `NotchAgent-Drops` in the macOS temporary directory, and their paths are inserted into the terminal. Finder files use their original paths and are not copied. Temporary files remain available for the CLI and are subject to macOS temporary-file cleanup. The clipboard is not changed.
 

@@ -121,6 +121,13 @@ struct RecentActivitiesView: View {
                         .background(Palette.mint.opacity(0.12)).clipShape(Capsule())
                 }
                 Spacer()
+                if model.attentionCount > 0 {
+                    Button(L("확인 필요 \(model.attentionCount)", "Needs attention \(model.attentionCount)")) {
+                        model.openPrioritySession()
+                    }
+                    .font(.caption2).buttonStyle(.plain).foregroundStyle(Palette.attention)
+                    .help(L("확인이 필요한 세션으로 이동 · ⇧⌘A", "Open a session needing attention · ⇧⌘A"))
+                }
                 if !model.recentActivities.isEmpty {
                     Button(L("비우기", "Clear")) { model.clearRecentActivities() }
                         .font(.caption2).buttonStyle(.plain).foregroundStyle(Palette.muted)
@@ -148,7 +155,10 @@ struct RecentActivitiesView: View {
     }
     private func activityRow(_ activity: RecentActivity, now: Date) -> some View {
         let available = model.sessions.contains { $0.id == activity.sessionID }
-        return Button { model.openSession(id: activity.sessionID) } label: {
+        return Button {
+            if available { model.openSession(id: activity.sessionID) }
+            else { model.markActivityRead(id: activity.id) }
+        } label: {
             HStack(spacing: 9) {
                 if activity.kind == .shell {
                     Image(systemName: "terminal").font(.caption).frame(width: 15)
@@ -170,7 +180,7 @@ struct RecentActivitiesView: View {
             .background(activity.isRead ? Color.white.opacity(0.025) : Color.white.opacity(0.055))
             .clipShape(.rect(cornerRadius: 8)).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).disabled(!available).opacity(available ? 1 : 0.55)
-        .help(available ? L("세션 열기", "Open session") : L("세션이 닫혀 기록만 남아 있습니다.", "This session is closed; its activity remains here."))
+        .buttonStyle(.plain).opacity(available ? 1 : 0.7)
+        .help(available ? L("세션 열기", "Open session") : L("닫힌 세션의 기록 읽음 처리", "Mark this closed session's activity as read"))
     }
 }

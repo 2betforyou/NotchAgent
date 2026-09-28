@@ -17,7 +17,10 @@ final class SnapshotTests: XCTestCase {
             UsageWindow(id: "secondary", usedPercent: 58, durationMinutes: 10080, resetsAt: Date().addingTimeInterval(300000))
         ], plan: "pro", lifetimeTokens: nil, fetchedAt: Date()))
         sampleUsage.enabled = true
-        let model = AppModel(usage: sampleUsage)
+        let suite = "NotchAgent.snapshot." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(defaults: defaults, usage: sampleUsage)
         model.notchHeight = 38
         model.hasPhysicalNotch = true
         model.physicalNotchWidth = 185 // 14-inch MacBook Pro camera housing
@@ -49,8 +52,6 @@ final class SnapshotTests: XCTestCase {
         model.recordActivity(.finished, for: desktopSessions[0], now: Date().addingTimeInterval(-180))
         model.recordActivity(.bell, for: desktopSessions[1], now: Date().addingTimeInterval(-60))
         model.banner = NotchBanner(sessionID: waiting.id, kind: .claude, reason: .finished, folder: "NotchAgents", shownAt: Date())
-        let savedFold = UserDefaults.standard.object(forKey: "showsNewSessionButtons")
-        defer { UserDefaults.standard.set(savedFold, forKey: "showsNewSessionButtons") }
         if ProcessInfo.processInfo.environment["NOTCHAGENT_SNAPSHOT_FOLDED"] == "1" { model.showsNewSessionButtons = false }
         if let language = ProcessInfo.processInfo.environment["NOTCHAGENT_SNAPSHOT_LANGUAGE"].flatMap(AppLanguage.init(rawValue:)) {
             AppLanguage.current = language // not persisted: the model's setter is bypassed on purpose
@@ -58,8 +59,6 @@ final class SnapshotTests: XCTestCase {
         if let accent = ProcessInfo.processInfo.environment["NOTCHAGENT_SNAPSHOT_ACCENT"].flatMap(Accent.init(rawValue:)) {
             Accent.current = accent
         }
-        let savedTheme = UserDefaults.standard.object(forKey: "terminalTheme")
-        defer { UserDefaults.standard.set(savedTheme, forKey: "terminalTheme") } // the model persists it
         if let theme = ProcessInfo.processInfo.environment["NOTCHAGENT_SNAPSHOT_THEME"].flatMap(TerminalTheme.init(rawValue:)) {
             model.terminalTheme = theme
         }

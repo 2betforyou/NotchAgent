@@ -53,10 +53,16 @@ struct SettingsView: View {
                 Toggle(L("작업 알림 표시", "Show activity notices"), isOn: $model.notifyEnabled)
                 Toggle(L("macOS 알림 센터에 표시", "Show in macOS Notification Center"), isOn: $model.systemNotificationsEnabled)
                 Toggle(L("짧은 알림 소리", "Play a short sound"), isOn: $model.activitySoundEnabled)
+                Toggle(L("확인 요청 알림", "Notify when input is needed"), isOn: $model.notifyForNeedsInput)
+                Toggle(L("작업 완료 알림", "Notify when work finishes"), isOn: $model.notifyForCompletion)
+                Toggle(L("세션 종료 알림", "Notify when a session ends"), isOn: $model.notifyForSessionEnd)
+                Toggle(L("macOS 알림에 작업 제목·폴더 표시", "Show task title and folder in macOS notifications"), isOn: $model.showNotificationDetails)
+                    .disabled(!model.systemNotificationsEnabled)
+                Toggle(L("최근 활동을 재실행 후에도 보관", "Keep recent activity after relaunch"), isOn: $model.keepRecentActivities)
                 if let message = model.notificationPermissionMessage, model.systemNotificationsEnabled {
                     Text(message).font(.caption).foregroundStyle(.orange)
                 }
-                Text(L("보고 있지 않은 세션의 작업 완료와 확인 요청을 알립니다. 놓친 알림은 미리보기의 최근 활동에 최대 50개 모아 둡니다. 알림 센터와 소리는 기본적으로 꺼져 있습니다.", "Notifies you about completions and requests in sessions you are not watching. The preview keeps up to 50 recent activities. Notification Center and sound are off by default."))
+                Text(L("알림 종류 선택은 macOS 알림·소리에 적용됩니다. 최근 활동은 최대 50개를 기기에 24시간 저장하며, 보관을 끄면 저장본을 즉시 삭제합니다. 알림 센터·소리·상세 내용은 기본적으로 꺼져 있습니다.", "Event choices apply to macOS notifications and sounds. Up to 50 recent activities are stored locally for 24 hours; turning this off immediately deletes the saved copy. Notification Center, sound, and details are off by default."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section(L("모양", "Appearance")) {
