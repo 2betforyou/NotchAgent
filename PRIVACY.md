@@ -19,11 +19,17 @@ macOS 환경설정(`~/Library/Preferences/app.notchagent.desktop.plist`)에 다�
 - 단축키, 언어, 강조색·터미널 테마·글꼴·글자 크기
 - 사용자가 직접 입력한 CLI 실행 파일 경로
 - 사용량 표시 사용 여부, 첫 실행 안내 완료 여부
-- 세션 복원을 켠 경우: 열려 있던 탭의 종류(Terminal·Codex·Claude Code·Gemini CLI), 폴더, 순서, 그리고 대화를 정확히 이어 열기 위한 각 CLI의 대화 ID(Claude Code 세션 ID, Codex 스레드 ID). 대화 내용은 저장하지 않으며, 이어 열기는 각 CLI가 스스로 보관한 기록을 사용합니다.
+- 세션 복원을 켠 경우: 열려 있던 탭의 종류(Terminal·Codex·Claude Code·Gemini CLI), 폴더, 순서, 터미널이 보고한 작업 제목과 사용자가 정한 탭 이름, 그리고 대화를 정확히 이어 열기 위한 각 CLI의 대화 ID(Claude Code 세션 ID, Codex 스레드 ID). 대화 본문은 저장하지 않으며, 이어 열기는 각 CLI가 스스로 보관한 기록을 사용합니다.
 
 Claude 사용량 표시를 켠 경우에만 `~/Library/Application Support/NotchAgent/claude-rate-limits.json`에 5시간·주간 한도 사용률과 초기화 시각을 저장합니다. 이 기능을 끄면 파일을 삭제합니다.
 
-NotchAgent는 터미널 입력·출력, 명령 기록, 대화 내용, API 키, 로그인 토큰을 저장하지 않습니다. 앱을 삭제한 뒤 위 환경설정 파일과 폴더를 지우면 NotchAgent의 모든 데이터가 제거됩니다.
+NotchAgent는 터미널 입력·출력 본문, 명령 기록, 대화 본문, API 키, 로그인 토큰을 저장하지 않습니다. 탭 제목은 위 세션 복원 정보에 포함됩니다.
+
+최근 활동은 에이전트 종류, 작업 제목, 폴더 이름, 이벤트, 시각, 읽음 상태를 앱 실행 중 메모리에 최대 50개 보관합니다. 앱을 종료하면 비워집니다. 알림 센터를 켜면 이 중 종류·제목·폴더·이벤트를 macOS 로컬 알림으로 전달하며, 알림 기록은 macOS에서 관리합니다.
+
+파일 경로가 없는 이미지나 스크린샷을 끌어놓으면 macOS 임시 폴더 아래 `NotchAgent-Drops`에 파일을 받아 경로를 터미널에 입력합니다. Finder 파일은 복사하지 않고 원래 경로를 사용합니다. 임시 파일은 세션이 읽을 수 있도록 유지되며 macOS의 임시 파일 정리 대상입니다. 클립보드는 변경하지 않습니다.
+
+앱 데이터는 위 환경설정·지원 폴더와 임시 파일을 지워 제거할 수 있습니다. 이미 표시된 시스템 알림은 알림 센터에서 지울 수 있습니다.
 
 ## 사용자가 실행하는 프로그램
 
@@ -56,6 +62,8 @@ NotchAgent는 키체인이나 로그인 정보를 읽지 않습니다. 두 기�
 ## 권한
 
 손쉬운 사용, 화면 기록, 연락처, 위치, 카메라, 마이크 권한을 요청하지 않습니다. 원격 프로그램이 클립보드를 덮어쓰는 기능(OSC 52)은 차단합니다. 로그인 시 실행은 사용자가 설정에서 켠 경우에만 등록합니다.
+
+macOS 알림 권한은 사용자가 알림 센터 옵션을 켰을 때만 요청합니다. 알림 센터와 소리는 기본적으로 꺼져 있습니다.
 
 ## 아동의 개인정보
 
@@ -91,11 +99,17 @@ In macOS preferences (`~/Library/Preferences/app.notchagent.desktop.plist`):
 - Shortcut, language, accent color, terminal theme, font, and size
 - CLI executable paths you entered
 - Whether usage display is on, and whether onboarding was completed
-- With session restore on: each open tab's kind, folder, and order, plus the CLI's conversation id (Claude Code session id, Codex thread id) so the exact conversation can be reopened. Conversation content is not stored; resuming uses each CLI's own history.
+- With session restore on: each open tab's kind, folder, order, terminal-reported task title, custom tab name, and CLI conversation id (Claude Code session id, Codex thread id). Conversation bodies are not stored; resuming uses each CLI's own history.
 
 Only with Claude usage display on, the 5-hour and weekly usage percentages and reset times are stored in `~/Library/Application Support/NotchAgent/claude-rate-limits.json`. Turning the feature off deletes the file.
 
-NotchAgent never stores terminal input or output, command history, conversation content, API keys, or sign-in tokens. Deleting the app together with the preferences file and folder above removes all NotchAgent data.
+NotchAgent never stores terminal input/output bodies, command history, conversation bodies, API keys, or sign-in tokens. Tab titles are included in the restoration metadata above.
+
+Recent activity keeps up to 50 events in memory while the app runs: agent, task title, folder name, event, time, and read state. It clears on quit. If Notification Center is enabled, the agent, title, folder, and event are passed to macOS local notifications; macOS manages that notification history.
+
+Dropped images or screenshots without an existing file path are received under `NotchAgent-Drops` in the macOS temporary directory, and their paths are inserted into the terminal. Finder files use their original paths and are not copied. Temporary files remain available for the CLI and are subject to macOS temporary-file cleanup. The clipboard is not changed.
+
+The preferences, support folder, and temporary files above can be removed to delete app data. Existing system notifications can be cleared in Notification Center.
 
 ## Programs you run
 
@@ -128,6 +142,8 @@ For troubleshooting, NotchAgent writes error kinds and events to the macOS syste
 ## Permissions
 
 NotchAgent does not request Accessibility, Screen Recording, Contacts, Location, Camera, or Microphone access. It blocks remote programs from overwriting the clipboard (OSC 52). Launch at login is registered only when you turn it on.
+
+macOS notification permission is requested only when you enable Notification Center. Notification Center and sound are off by default.
 
 ## Children's privacy
 

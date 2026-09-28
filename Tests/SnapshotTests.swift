@@ -12,16 +12,16 @@ final class SnapshotTests: XCTestCase {
         // Also requires a scratch support dir so sample Claude data never touches the real one.
         try XCTSkipUnless(env["NOTCHAGENT_SNAPSHOT_DIR"] != nil && env["NOTCHAGENT_SUPPORT_DIR"] != nil)
         let output = URL(fileURLWithPath: env["NOTCHAGENT_SNAPSHOT_DIR"]!)
-        let model = AppModel()
+        let sampleUsage = UsageService(snapshot: UsageSnapshot(windows: [
+            UsageWindow(id: "primary", usedPercent: 32, durationMinutes: 300, resetsAt: Date().addingTimeInterval(7200)),
+            UsageWindow(id: "secondary", usedPercent: 58, durationMinutes: 10080, resetsAt: Date().addingTimeInterval(300000))
+        ], plan: "pro", lifetimeTokens: nil, fetchedAt: Date()))
+        sampleUsage.enabled = true
+        let model = AppModel(usage: sampleUsage)
         model.notchHeight = 38
         model.hasPhysicalNotch = true
         model.physicalNotchWidth = 185 // 14-inch MacBook Pro camera housing
         model.panelWidth = 900; model.panelHeight = 570
-        if model.usage.enabled {
-            model.usage.refresh()
-            let deadline = Date().addingTimeInterval(20)
-            while model.usage.isLoading && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
-        }
         let now = Date().timeIntervalSince1970
         ClaudeStatusLine.record(["five_hour": ["used_percentage": 23, "resets_at": now + 9000],
                                  "seven_day": ["used_percentage": 85, "resets_at": now + 400_000]])
@@ -32,11 +32,13 @@ final class SnapshotTests: XCTestCase {
         model.workspaces = ["Desktop", "Desktop/NotchAgents", "Documents"].map { SavedWorkspace(path: home + "/" + $0) }
         model.workspacePath = home + "/Desktop"
         let desktopSessions = (0..<6).map { i in
-            TerminalSession(kind: [.codex, .claude, .shell][i % 3], directory: URL(fileURLWithPath: home + "/Desktop"), executable: "/bin/zsh", fontSize: 13)
+            TerminalSession(kind: [.codex, .claude, .shell][i % 3], directory: URL(fileURLWithPath: home + "/Desktop"), executable: "/bin/zsh", fontSize: 13,
+                            title: ["로그인 오류 수정", "API 테스트 작성", "Terminal", "결제 흐름 점검", "README 정리", "배포 준비"][i])
         }
         model.sessions = desktopSessions + [
                           TerminalSession(kind: .codex, directory: URL(fileURLWithPath: home + "/Desktop/NotchAgents"), executable: "/bin/zsh", fontSize: 13),
                           TerminalSession(kind: .claude, directory: URL(fileURLWithPath: home + "/Desktop/NotchAgents"), executable: "/bin/zsh", fontSize: 13)]
+        defer { TerminalSession.stopAll(model.sessions, grace: 0.2) }
         model.selectedID = desktopSessions.last?.id
         // Closed notch: one agent working, one waiting for the user, and a notice.
         let working = model.sessions[7], waiting = model.sessions[6]
@@ -44,6 +46,8 @@ final class SnapshotTests: XCTestCase {
         waiting.terminal.onBell?()
         model.phase = .closed
         model.tickActivity()
+        model.recordActivity(.finished, for: desktopSessions[0], now: Date().addingTimeInterval(-180))
+        model.recordActivity(.bell, for: desktopSessions[1], now: Date().addingTimeInterval(-60))
         model.banner = NotchBanner(sessionID: waiting.id, kind: .claude, reason: .finished, folder: "NotchAgents", shownAt: Date())
         let savedFold = UserDefaults.standard.object(forKey: "showsNewSessionButtons")
         defer { UserDefaults.standard.set(savedFold, forKey: "showsNewSessionButtons") }
@@ -63,7 +67,7 @@ final class SnapshotTests: XCTestCase {
             model.phase = phase
             if phase != .closed { model.banner = nil }
             let host = NSHostingView(rootView: IslandView(model: model))
-            host.frame = NSRect(x: 0, y: 0, width: model.panelWidth + 32, height: model.panelHeight + 32)
+            host.frame = NSRect(x: 0, y: 0, width: model.panelWidth + 32, height: model.hostHeight + 32)
             let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
             window.contentView = host
             window.backgroundColor = NSColor(white: 0.85, alpha: 1)
@@ -108,5 +112,34 @@ final class SnapshotTests: XCTestCase {
         let footerRep = try XCTUnwrap(footer.bitmapImageRepForCachingDisplay(in: footer.bounds))
         footer.cacheDisplay(in: footer.bounds, to: footerRep)
         try XCTUnwrap(footerRep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("footer.png"))
+        // Closed notch with real sessions: one working, then several in different states.
+        func closedRender(_ sessions: [TerminalSession], name: String) throws {
+            let m = AppModel(usage: model.usage)
+            m.claudeUsage.enabled = true; m.claudeUsage.reload()
+            m.notchHeight = 32; m.compactWidth = 285; m.panelWidth = 900; m.panelHeight = 570
+            m.sessions = sessions; m.phase = .closed
+            let host = NSHostingView(rootView: IslandView(model: m))
+            host.frame = NSRect(x: 0, y: 0, width: 932, height: 100)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host; window.backgroundColor = NSColor(white: 0.86, alpha: 1)
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name))
+        }
+        try closedRender([], name: "closed-idle.png") // no sessions: remaining quota per agent
+        let folder = URL(fileURLWithPath: home + "/Desktop")
+        func live(_ kind: AgentKind) -> TerminalSession {
+            let s = TerminalSession(kind: kind, directory: folder, executable: "/bin/zsh", fontSize: 13); s.start(); return s
+        }
+        let solo = live(.claude)
+        solo.recordOutput(at: Date()); _ = solo.tick(now: Date(), visible: false)
+        try closedRender([solo], name: "closed-single.png")
+        let busyTab = live(.claude), askingTab = live(.codex), doneTab = live(.claude), quiet = live(.codex), more = live(.shell)
+        busyTab.recordOutput(at: Date()); _ = busyTab.tick(now: Date(), visible: false)
+        askingTab.terminal.onBell?(); _ = askingTab.tick(now: Date(), visible: false)
+        doneTab.receive(.finished, conversation: nil, now: Date()); _ = doneTab.tick(now: Date(), visible: false)
+        try closedRender([busyTab, askingTab, doneTab, quiet, more], name: "closed-multi.png")
+        TerminalSession.stopAll([solo, busyTab, askingTab, doneTab, quiet, more], grace: 0.2)
     }
 }

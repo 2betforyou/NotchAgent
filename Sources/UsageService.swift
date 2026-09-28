@@ -10,6 +10,8 @@ final class UsageService {
     @ObservationIgnored private var client: UsageRPC?
     @ObservationIgnored private var refreshTimer: Timer?
 
+    init(snapshot: UsageSnapshot? = nil) { self.snapshot = snapshot }
+
     func start() {
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in

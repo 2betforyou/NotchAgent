@@ -30,6 +30,9 @@ final class AppModel {
     var terminalFont: String { didSet { defaults.set(terminalFont, forKey: "terminalFont") } }
     var appearance: TerminalAppearance { TerminalAppearance(theme: terminalTheme, font: terminalFont, size: fontSize, accent: accent) }
     var preferredDisplay: String { didSet { defaults.set(preferredDisplay, forKey: "display") } }
+    var terminalSize: TerminalSize { didSet { defaults.set(terminalSize.rawValue, forKey: "terminalSize"); layoutChanged?() } }
+    var collapseOnDeactivate: Bool { didSet { defaults.set(collapseOnDeactivate, forKey: "collapseOnDeactivate") } }
+    @ObservationIgnored var layoutChanged: (() -> Void)?
     var hotkey: Hotkey {
         didSet { if let data = try? JSONEncoder().encode(hotkey) { defaults.set(data, forKey: "hotkey") } }
     }
@@ -44,22 +47,34 @@ final class AppModel {
     /// The Terminal/Codex/Claude/Gemini buttons beside the tabs can be folded behind one button.
     var showsNewSessionButtons: Bool { didSet { defaults.set(showsNewSessionButtons, forKey: "showsNewSessionButtons") } }
     var notifyEnabled: Bool { didSet { defaults.set(notifyEnabled, forKey: "notifyEnabled") } }
+    var systemNotificationsEnabled: Bool {
+        didSet { defaults.set(systemNotificationsEnabled, forKey: "systemNotificationsEnabled"); notificationSettingsChanged?(systemNotificationsEnabled) }
+    }
+    var activitySoundEnabled: Bool { didSet { defaults.set(activitySoundEnabled, forKey: "activitySoundEnabled") } }
+    var notificationPermissionMessage: String?
+    @ObservationIgnored var notificationSettingsChanged: ((Bool) -> Void)?
+    @ObservationIgnored var activityOccurred: ((RecentActivity) -> Void)?
+    private(set) var recentActivities: [RecentActivity] = []
+    static let activityLimit = 50
+    var unreadActivityCount: Int { recentActivities.filter { !$0.isRead }.count }
     var restoreSessions: Bool {
         didSet { defaults.set(restoreSessions, forKey: "restoreSessions"); saveSessions() }
     }
     /// Dynamic-Island style notice under the closed notch.
     var banner: NotchBanner?
-    let usage = UsageService()
+    let usage: UsageService
     let claudeUsage = ClaudeUsageService()
     @ObservationIgnored var showTerminal: (() -> Void)?
     @ObservationIgnored var collapse: (() -> Void)?
     @ObservationIgnored var showSettings: (() -> Void)?
     /// Runs a modal alert where the user can see it (the island sits above modal windows).
     @ObservationIgnored var runAlert: ((NSAlert) -> NSApplication.ModalResponse)?
-    @ObservationIgnored private let defaults = UserDefaults.standard
+    @ObservationIgnored private let defaults: UserDefaults
 
-    init() {
-        let d = UserDefaults.standard
+    init(defaults: UserDefaults = .standard, usage: UsageService? = nil) {
+        self.defaults = defaults
+        self.usage = usage ?? UsageService()
+        let d = defaults
         workspacePath = d.string(forKey: "workspace") ?? FileManager.default.homeDirectoryForCurrentUser.path
         hoverEnabled = d.object(forKey: "hoverEnabled") as? Bool ?? true
         hoverSpeed = d.string(forKey: "hoverSpeed").flatMap(HoverSpeed.init(rawValue:)) ?? .default
@@ -69,7 +84,11 @@ final class AppModel {
         terminalTheme = d.string(forKey: "terminalTheme").flatMap(TerminalTheme.init(rawValue:)) ?? .standard
         terminalFont = d.string(forKey: "terminalFont") ?? TerminalFont.system
         preferredDisplay = d.string(forKey: "display") ?? "builtin"
+        terminalSize = d.string(forKey: "terminalSize").flatMap(TerminalSize.init(rawValue:)) ?? .standard
+        collapseOnDeactivate = d.bool(forKey: "collapseOnDeactivate")
         notifyEnabled = d.object(forKey: "notifyEnabled") as? Bool ?? true
+        systemNotificationsEnabled = d.bool(forKey: "systemNotificationsEnabled")
+        activitySoundEnabled = d.bool(forKey: "activitySoundEnabled")
         showsNewSessionButtons = d.object(forKey: "showsNewSessionButtons") as? Bool ?? true
         quickAgent = d.string(forKey: "quickAgent").flatMap(AgentKind.init(rawValue:)).flatMap { $0 == .shell ? nil : $0 } ?? .claude
         hotkey = d.data(forKey: "hotkey").flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) } ?? .default
@@ -81,10 +100,11 @@ final class AppModel {
         AppLanguage.current = language
     }
     /// Measured by the view; the island and its hover area use the same height.
-    var previewContentHeight: CGFloat = 0
+    var previewContentHeight: CGFloat = 0 { didSet { layoutChanged?() } }
     var previewHeight: CGFloat {
-        previewContentHeight > 0 ? previewContentHeight : 310 + notchHeight + (claudeUsage.enabled ? 90 : 0)
+        previewContentHeight > 0 ? previewContentHeight : 440 + notchHeight
     }
+    var hostHeight: CGFloat { max(panelHeight, previewHeight) }
     var attentionCount: Int { sessions.filter { $0.attention != nil }.count }
     /// The most important unseen event among a folder's sessions.
     func attention(in path: String) -> AttentionReason? {
@@ -114,14 +134,38 @@ final class AppModel {
         return elsewhere > 0 ? L("다른 폴더에서 \(elsewhere)개 실행 중", "\(elsewhere) running in other folders")
                              : L("터미널과 에이전트를 노치에서 바로.", "Terminal and agents, right from the notch.")
     }
-    var closedWidth: CGFloat { banner == nil ? compactWidth : max(compactWidth, 400) }
+    /// Sessions the closed notch shows, in tab order: running ones and ended ones not yet seen.
+    var notchSessions: [TerminalSession] { sessions.filter { $0.isRunning || $0.attention != nil } }
+    var closedLayout: ClosedNotchLayout {
+        let layout = ClosedNotchLayout.make(notchSessions.map(\.id))
+        guard layout == .idle, !idleUsages.isEmpty else { return layout }
+        return .usage(idleUsages)
+    }
+    /// Remaining quota per agent for the idle notch; only agents whose usage display is on.
+    var idleUsages: [IdleUsage] {
+        [usage.enabled ? IdleUsage(agent: .codex, snapshot: usage.snapshot) : nil,
+         claudeUsage.enabled ? IdleUsage(agent: .claude, snapshot: claudeUsage.snapshot) : nil].compactMap { $0 }
+    }
+    /// Camera housing width (a virtual notch on displays without one).
+    var notchGapWidth: CGFloat { compactWidth - 100 }
+    /// With nothing to show, the wings vanish into the notch; an unread error keeps a small one.
+    var closedWingWidth: CGFloat {
+        let wing = closedLayout.wingWidth
+        return wing == 0 && lastError != nil ? 32 : wing
+    }
+    var closedWidth: CGFloat {
+        let width = notchGapWidth + closedWingWidth * 2
+        return banner == nil ? width : max(width, 400)
+    }
     var closedHeight: CGFloat { banner == nil ? notchHeight : notchHeight + 34 }
     static let bannerDuration: TimeInterval = 4.5
     /// Called once a second: updates working state and raises notices for unseen sessions.
-    func tickActivity(now: Date = Date()) {
+    func tickActivity(now: Date = Date(), terminalIsVisible: Bool = true) {
         for session in sessions {
-            let visible = phase == .terminal && session.id == selectedID
+            let visible = terminalIsVisible && phase == .terminal && session.id == selectedID
+            if visible { markActivitiesRead(for: session.id) }
             guard let reason = session.tick(now: now, visible: visible) else { continue }
+            recordActivity(reason, for: session, now: now)
             if notifyEnabled, phase == .closed {
                 banner = NotchBanner(sessionID: session.id, kind: session.kind, reason: reason,
                                      folder: session.initialDirectory.lastPathComponent, shownAt: now)
@@ -132,9 +176,29 @@ final class AppModel {
     func openBanner() {
         guard let banner, let session = sessions.first(where: { $0.id == banner.sessionID }) else { self.banner = nil; return }
         self.banner = nil
+        openSession(id: session.id)
+    }
+    func recordActivity(_ reason: AttentionReason, for session: TerminalSession, now: Date) {
+        let activity = RecentActivity(sessionID: session.id, kind: session.kind, title: session.displayTitle,
+                                      folder: session.initialDirectory.lastPathComponent, reason: reason, date: now)
+        recentActivities.insert(activity, at: 0)
+        if recentActivities.count > Self.activityLimit { recentActivities.removeLast(recentActivities.count - Self.activityLimit) }
+        activityOccurred?(activity)
+    }
+    func markActivitiesRead(for sessionID: UUID) {
+        for index in recentActivities.indices where recentActivities[index].sessionID == sessionID && !recentActivities[index].isRead {
+            recentActivities[index].isRead = true
+        }
+    }
+    func clearRecentActivities() { recentActivities.removeAll() }
+    func openSession(id: UUID) {
+        guard let session = sessions.first(where: { $0.id == id }) else {
+            lastError = L("이 알림의 세션은 이미 닫혔습니다.", "The session for this notification has already been closed.")
+            showTerminal?()
+            return
+        }
         activateWorkspace(Workspaces.normalize(session.initialDirectory.path))
-        selectedID = session.id
-        showTerminal?()
+        select(session)
     }
     var selected: TerminalSession? { sessions.first { $0.id == selectedID } }
     var runningCount: Int { sessions.filter(\.isRunning).count }
@@ -148,6 +212,23 @@ final class AppModel {
         sessions.filter { $0.isRunning && Workspaces.normalize($0.initialDirectory.path) == path }.count
     }
     @ObservationIgnored private var lastSelection: [String: UUID] = [:]
+    @discardableResult func addDroppedFolders(_ urls: [URL]) -> Bool {
+        let folders = urls.filter { url in
+            guard url.isFileURL else { return false }
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+        guard let last = folders.last else { return false }
+        for url in folders {
+            let path = Workspaces.normalize(url.path)
+            if !workspaces.contains(where: { $0.path == path }) { workspaces.append(SavedWorkspace(path: path)) }
+        }
+        saveWorkspaces()
+        activateWorkspace(Workspaces.normalize(last.path))
+        lastError = nil
+        showTerminal?()
+        return true
+    }
     func addWorkspace() {
         // The always-on-top island must not cover the system file picker.
         collapse?()
@@ -231,7 +312,7 @@ final class AppModel {
             lastError = error.localizedDescription
         }
     }
-    /// Ends the folder's sessions and runs `git worktree remove` (never forced).
+    /// Removes the worktree first; failed removal must leave its sessions running.
     func removeWorktree(_ path: String) {
         let running = sessions.filter { $0.isRunning && Workspaces.normalize($0.initialDirectory.path) == path }.count
         let alert = NSAlert()
@@ -240,15 +321,18 @@ final class AppModel {
             + (running > 0 ? L(" 실행 중인 \(running)개의 세션이 종료됩니다.", " \(running) running session(s) will end.") : "")
         alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("worktree 제거", "Remove Worktree"))
         guard (runAlert?(alert) ?? alert.runModal()) == .alertSecondButtonReturn else { return }
-        TerminalSession.stopAll(sessions.filter { Workspaces.normalize($0.initialDirectory.path) == path })
-        Task.detached {
-            let result = Result { try Worktree.remove(path) }
-            await MainActor.run {
-                switch result {
-                case .success: self.forgetWorkspace(path); self.lastError = nil
-                case .failure(let error): self.lastError = error.localizedDescription
-                }
-            }
+        Task { await finishRemovingWorktree(path) }
+    }
+    func finishRemovingWorktree(_ path: String) async {
+        let failure = await Task.detached { () -> String? in
+            do { try Worktree.remove(path); return nil }
+            catch { return error.localizedDescription }
+        }.value
+        if let failure {
+            lastError = failure
+        } else {
+            forgetWorkspace(path)
+            lastError = nil
         }
     }
     func moveWorkspace(_ path: String, onto target: String) {
@@ -288,7 +372,8 @@ final class AppModel {
         showTerminal?()
     }
     private func makeSession(kind: AgentKind, executable: String, directory: URL, resume: Bool,
-                             conversation: String? = nil, extra: [String] = []) -> TerminalSession {
+                             conversation: String? = nil, title: String? = nil, customTitle: String? = nil,
+                             extra: [String] = []) -> TerminalSession {
         var arguments: [String] = [], environment: [String: String] = [:]
         if let helper = Bundle.main.executablePath {
             switch kind {
@@ -299,12 +384,19 @@ final class AppModel {
                     environment[ClaudeStatusLine.chainVariable] = ClaudeStatusLine.userCommand(workspace: directory) ?? ""
                 }
             case .codex:
-                arguments = ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
                 let config = (try? String(contentsOf: FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent(".codex/config.toml"), encoding: .utf8)) ?? ""
-                if let own = AgentEvents.userCodexNotify(configText: config),
-                   let data = try? JSONSerialization.data(withJSONObject: own) {
-                    environment[AgentEvents.codexChainVariable] = String(decoding: data, as: UTF8.self)
+                switch AgentEvents.userCodexNotify(configText: config) {
+                case .absent:
+                    arguments = ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
+                case .command(let own):
+                    arguments = ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
+                    if let data = try? JSONSerialization.data(withJSONObject: own) {
+                        environment[AgentEvents.codexChainVariable] = String(decoding: data, as: UTF8.self)
+                    }
+                case .unsupported:
+                    // Preserve the user's notify program if its config cannot be chained safely.
+                    break
                 }
             case .shell, .gemini: break
             }
@@ -312,8 +404,9 @@ final class AppModel {
         if resume { arguments += SessionRestore.resumeArguments(for: kind, conversation: conversation) }
         arguments += extra
         let session = TerminalSession(kind: kind, directory: directory, executable: executable, fontSize: fontSize,
-                                      arguments: arguments, environment: environment)
+                                      arguments: arguments, environment: environment, title: title, customTitle: customTitle)
         session.conversationID = conversation
+        session.terminal.onDropError = { [weak self] message in self?.lastError = message }
         session.apply(appearance)
         return session
     }
@@ -321,7 +414,8 @@ final class AppModel {
     func saveSessions() {
         guard restoreSessions else { defaults.removeObject(forKey: "savedSessions"); return }
         let open = sessions.filter { !$0.ended }.map {
-            SavedSession(kind: $0.kind, path: $0.initialDirectory.path, conversation: $0.conversationID)
+            SavedSession(kind: $0.kind, path: $0.initialDirectory.path, conversation: $0.conversationID,
+                         title: $0.title, customTitle: $0.customTitle)
         }
         if let data = try? JSONEncoder().encode(open) { defaults.set(data, forKey: "savedSessions") }
     }
@@ -334,7 +428,7 @@ final class AppModel {
             guard SavedWorkspace(path: plan.session.path).exists, let executable = executable(for: plan.session.kind) else { continue }
             sessions.append(makeSession(kind: plan.session.kind, executable: executable,
                                         directory: URL(fileURLWithPath: plan.session.path), resume: plan.resume,
-                                        conversation: plan.session.conversation))
+                                        conversation: plan.session.conversation, title: plan.session.title, customTitle: plan.session.customTitle))
         }
         selectedID = visibleSessions.last?.id
     }
@@ -365,12 +459,34 @@ final class AppModel {
         }
         return false
     }
-    func select(_ session: TerminalSession) { selectedID = session.id; showTerminal?() }
+    func select(_ session: TerminalSession) {
+        selectedID = session.id
+        session.clearAttention()
+        markActivitiesRead(for: session.id)
+        showTerminal?()
+    }
+    func setSessionName(_ session: TerminalSession, name: String?) {
+        session.customTitle = SessionName.clean(name)
+        saveSessions()
+    }
+    func renameSession(_ session: TerminalSession) {
+        let alert = NSAlert()
+        alert.messageText = L("탭 이름 변경", "Rename Tab")
+        alert.informativeText = L("비워두면 터미널이 알려 주는 작업 제목을 사용합니다.", "Leave empty to use the task title reported by the terminal.")
+        let field = NSTextField(string: session.customTitle ?? session.displayTitle)
+        field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+        field.placeholderString = session.title
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: L("저장", "Save")); alert.addButton(withTitle: L("취소", "Cancel"))
+        guard (runAlert?(alert) ?? alert.runModal()) == .alertFirstButtonReturn else { return }
+        setSessionName(session, name: field.stringValue)
+    }
     func closeSession(_ session: TerminalSession) {
         if session.isBusy {
             let alert = NSAlert()
-            alert.messageText = L("작업 중인 세션을 종료할까요?", "End a session that is working?")
-            alert.informativeText = L("진행 중인 작업이 중단됩니다. 노치만 접으려면 \(hotkey.label)를 누르세요.", "The work in progress will stop. To just close the notch, press \(hotkey.label).")
+            alert.messageText = L("실행 중인 세션을 종료할까요?", "End this running session?")
+            alert.informativeText = L("입력 중인 내용과 진행 중인 작업이 중단될 수 있습니다. 노치만 접으려면 \(hotkey.label)를 누르세요.", "Unsubmitted input and work in progress may be lost. To just close the notch, press \(hotkey.label).")
             alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("세션 종료", "End Session"))
             let response = runAlert?(alert) ?? alert.runModal()
             guard response == .alertSecondButtonReturn else { return }

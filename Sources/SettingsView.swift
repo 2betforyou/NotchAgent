@@ -42,8 +42,21 @@ struct SettingsView: View {
                 Picker(L("호버 반응 속도", "Hover delay"), selection: $model.hoverSpeed) {
                     ForEach(HoverSpeed.allCases) { Text($0.label).tag($0) }
                 }.disabled(!model.hoverEnabled)
+                Picker(L("큰 화면 크기", "Terminal size"), selection: $model.terminalSize) {
+                    ForEach(TerminalSize.allCases) { Text($0.name).tag($0) }
+                }
+                Toggle(L("다른 앱을 클릭하면 자동으로 접기", "Collapse when switching to another app"), isOn: $model.collapseOnDeactivate)
+                Text(L("접혀도 터미널과 에이전트는 계속 실행됩니다.", "Terminal and agent sessions keep running while collapsed."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section(L("활동 알림", "Activity Notifications")) {
                 Toggle(L("작업 알림 표시", "Show activity notices"), isOn: $model.notifyEnabled)
-                Text(L("노치를 접어 둔 동안 보고 있지 않은 세션이 작업을 마치거나 확인을 요청하면 노치 아래에 잠깐 알려 줍니다.", "While the notch is closed, briefly shows below it when a session you are not watching finishes or asks for you."))
+                Toggle(L("macOS 알림 센터에 표시", "Show in macOS Notification Center"), isOn: $model.systemNotificationsEnabled)
+                Toggle(L("짧은 알림 소리", "Play a short sound"), isOn: $model.activitySoundEnabled)
+                if let message = model.notificationPermissionMessage, model.systemNotificationsEnabled {
+                    Text(message).font(.caption).foregroundStyle(.orange)
+                }
+                Text(L("보고 있지 않은 세션의 작업 완료와 확인 요청을 알립니다. 놓친 알림은 미리보기의 최근 활동에 최대 50개 모아 둡니다. 알림 센터와 소리는 기본적으로 꺼져 있습니다.", "Notifies you about completions and requests in sessions you are not watching. The preview keeps up to 50 recent activities. Notification Center and sound are off by default."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section(L("모양", "Appearance")) {
@@ -179,7 +192,7 @@ struct WelcomeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 25) {
             HStack(spacing: 10) {
-                Image(systemName: "terminal.fill").foregroundStyle(Palette.mint)
+                AppMark(size: 22)
                 Text("NotchAgent").fontWeight(.semibold)
                 Spacer()
                 Text("EARLY ACCESS").font(.caption2.monospaced()).foregroundStyle(Palette.muted)

@@ -56,39 +56,79 @@ enum AgentEvents {
     static func tomlString(_ value: String) -> String {
         "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
-    /// The top-level `notify = [...]` from `~/.codex/config.toml`, if any.
-    static func userCodexNotify(configText: String) -> [String]? {
-        for rawLine in configText.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("[") { return nil } // tables start; notify must be top-level
-            guard line.hasPrefix("notify"), let eq = line.firstIndex(of: "=") else { continue }
-            guard line[line.startIndex..<eq].trimmingCharacters(in: .whitespaces) == "notify" else { continue }
-            return parseStringArray(String(line[line.index(after: eq)...]))
-        }
-        return nil
+    enum CodexNotify: Equatable {
+        case absent, command([String]), unsupported
     }
-    /// Parses a one-line TOML array of basic ("…") or literal ('…') strings.
+    /// Parse only the top-level notify command. Unknown syntax must not be overridden.
+    static func userCodexNotify(configText: String) -> CodexNotify {
+        let lines = configText.components(separatedBy: .newlines)
+        for (index, rawLine) in lines.enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") { return .absent } // tables start; notify must be top-level
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            let key = line[line.startIndex..<eq].trimmingCharacters(in: .whitespaces)
+            guard ["notify", "\"notify\"", "'notify'"].contains(key) else { continue }
+            let value = String(line[line.index(after: eq)...]) + "\n" + lines.dropFirst(index + 1).joined(separator: "\n")
+            return parseStringArray(value).map(CodexNotify.command) ?? .unsupported
+        }
+        return .absent
+    }
+    /// Parses a TOML array of basic ("…") or literal ('…') strings, including multiline arrays.
     static func parseStringArray(_ text: String) -> [String]? {
-        var items: [String] = [], chars = Array(text.trimmingCharacters(in: .whitespaces)), i = 0
-        guard chars.first == "[" else { return nil }
-        i = 1
-        while i < chars.count {
-            let c = chars[i]
-            if c == "]" { return items }
-            if c == "\"" || c == "'" {
-                let quote = c; var value = ""; i += 1
-                while i < chars.count, chars[i] != quote {
-                    if quote == "\"", chars[i] == "\\", i + 1 < chars.count {
-                        i += 1
-                        switch chars[i] { case "n": value.append("\n"); case "t": value.append("\t"); default: value.append(chars[i]) }
-                    } else { value.append(chars[i]) }
-                    i += 1
+        let chars = Array(text)
+        var items: [String] = [], i = 0
+        func skipTrivia() {
+            while i < chars.count {
+                if chars[i].isWhitespace { i += 1; continue }
+                if chars[i] == "#" {
+                    while i < chars.count && chars[i] != "\n" { i += 1 }
+                    continue
                 }
-                items.append(value)
+                break
             }
+        }
+        skipTrivia()
+        guard i < chars.count, chars[i] == "[" else { return nil }
+        i += 1
+        while true {
+            skipTrivia()
+            guard i < chars.count else { return nil }
+            if chars[i] == "]" { return items }
+            let quote = chars[i]
+            guard quote == "\"" || quote == "'" else { return nil }
+            i += 1
+            var value = "", closed = false
+            while i < chars.count {
+                let c = chars[i]; i += 1
+                if c == quote { closed = true; break }
+                if c == "\n" || c == "\r" { return nil }
+                if quote == "\"", c == "\\" {
+                    guard i < chars.count else { return nil }
+                    let escape = chars[i]; i += 1
+                    switch escape {
+                    case "\"", "\\": value.append(escape)
+                    case "n": value.append("\n")
+                    case "t": value.append("\t")
+                    case "r": value.append("\r")
+                    case "b": value.append("\u{8}")
+                    case "f": value.append("\u{c}")
+                    case "u", "U":
+                        let count = escape == "u" ? 4 : 8
+                        guard i + count <= chars.count,
+                              let scalar = UInt32(String(chars[i..<(i + count)]), radix: 16).flatMap(Unicode.Scalar.init) else { return nil }
+                        value.unicodeScalars.append(scalar); i += count
+                    default: return nil
+                    }
+                } else { value.append(c) }
+            }
+            guard closed else { return nil }
+            items.append(value)
+            skipTrivia()
+            guard i < chars.count else { return nil }
+            if chars[i] == "]" { return items }
+            guard chars[i] == "," else { return nil }
             i += 1
         }
-        return nil
     }
 
     // MARK: Helper mode

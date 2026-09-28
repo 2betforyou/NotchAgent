@@ -22,6 +22,7 @@ enum Palette {
         case .finished: done
         case .bell: attention
         case .exited: muted
+        case .failed: low
         }
     }
 }
@@ -99,11 +100,12 @@ struct IslandView: View {
                 .fill(.black)
                 .shadow(color: .black.opacity(model.phase == .closed ? 0 : 0.3), radius: 12, y: 8)
             if model.phase == .closed {
-                compact.transition(AnyTransition(.blurReplace).animation(reduceMotion ? nil : Motion.content))
+                compact.modifier(FolderDropTarget(model: model))
+                    .transition(AnyTransition(.blurReplace).animation(reduceMotion ? nil : Motion.content))
             } else {
                 VStack(spacing: 0) {
                     // The top row sits in the menu bar band; only the camera housing stays empty.
-                    topRow.padding(.bottom, 10)
+                    topRow.modifier(FolderDropTarget(model: model)).padding(.bottom, 10)
                     if let error = model.lastError {
                         errorBanner(error).padding(.bottom, 10).transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -137,7 +139,7 @@ struct IslandView: View {
         .motion(Motion.island, value: model.banner, reduce: reduceMotion)
         .motion(Motion.island, value: model.previewContentHeight, reduce: reduceMotion)
         .motion(Motion.snappy, value: model.lastError, reduce: reduceMotion)
-        .frame(width: model.panelWidth + 32, height: model.panelHeight + 32, alignment: .top)
+        .frame(width: model.panelWidth + 32, height: model.hostHeight + 32, alignment: .top)
         .foregroundStyle(.white)
         .tint(Palette.mint)
         .preferredColorScheme(.dark)
@@ -145,15 +147,11 @@ struct IslandView: View {
     private var compact: some View {
         VStack(spacing: 0) {
             Button { model.showTerminal?() } label: {
-                HStack {
-                    leftWing
-                    Spacer(minLength: 0)
-                    if model.lastError != nil {
-                        Image(systemName: "exclamationmark.circle.fill").font(.caption).foregroundStyle(.orange)
-                    }
-                    NotchStatusView(status: model.notchStatus)
+                HStack(spacing: 0) {
+                    leftWing.frame(width: model.closedWingWidth)
+                    Color.clear.frame(width: model.notchGapWidth) // camera housing
+                    rightWing.frame(width: model.closedWingWidth)
                 }
-                .padding(.horizontal, 19)
                 .frame(maxWidth: .infinity)
                 .frame(height: model.notchHeight)
                 .contentShape(Rectangle())
@@ -162,20 +160,42 @@ struct IslandView: View {
             .accessibilityLabel(L("NotchAgent 열기, 실행 중인 세션 \(model.runningCount)개", "Open NotchAgent, \(model.runningCount) running session(s)") + (model.attentionCount > 0 ? L(", 확인할 세션 \(model.attentionCount)개", ", \(model.attentionCount) need(s) attention") : ""))
             if let banner = model.banner { bannerRow(banner) }
         }
+        .motion(Motion.island, value: model.closedLayout, reduce: reduceMotion)
     }
-    /// Running agents beside the camera: up to two, most urgent first.
+    /// Who: the agent (one session) or every session nearest the camera first (several).
     @ViewBuilder private var leftWing: some View {
-        let live = model.sessions.filter(\.isRunning).sorted { rank($0) > rank($1) }
-        if live.isEmpty {
-            Image(systemName: "terminal.fill").font(.caption).foregroundStyle(Palette.mint)
-        } else {
-            HStack(spacing: 5) {
-                ForEach(live.prefix(2)) { session in SessionGlyph(session: session, size: 12) }
+        switch model.closedLayout {
+        case .idle: Color.clear
+        case .usage(let items):
+            if let first = items.first {
+                // Two agents: one per side. One agent: gauge here, number on the right.
+                if items.count > 1 { UsageBadge(usage: first, showsNumber: true) } else { UsageBadge(usage: first, showsNumber: false) }
             }
+        case .single(let id):
+            if let session = model.sessions.first(where: { $0.id == id }) { SessionIcon(kind: session.kind, size: 15) }
+        case .multi(let left, _):
+            HStack(spacing: 4) { ForEach(left, id: \.self) { id in ringedIcon(id) } }
+                .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 6)
         }
     }
-    private func rank(_ session: TerminalSession) -> Int {
-        (session.attention != nil ? 2 : 0) + (session.isWorking ? 1 : 0)
+    /// What: one status symbol (one session), or the rest of the sessions (several).
+    @ViewBuilder private var rightWing: some View {
+        switch model.closedLayout {
+        case .idle:
+            if model.lastError != nil { Circle().fill(.orange).frame(width: 6, height: 6) }
+        case .usage(let items):
+            if items.count > 1 { UsageBadge(usage: items[1], showsNumber: true) }
+            else if let only = items.first { UsageBadge.percent(only) }
+        case .single: NotchStatusView(status: model.notchStatus)
+        case .multi(_, let right):
+            HStack(spacing: 4) { ForEach(right, id: \.self) { id in ringedIcon(id) } }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
+        }
+    }
+    @ViewBuilder private func ringedIcon(_ id: UUID) -> some View {
+        if let session = model.sessions.first(where: { $0.id == id }) {
+            RingedSessionIcon(kind: session.kind, badge: NotchBadge(attention: session.attention, working: session.isWorking))
+        }
     }
     private func bannerRow(_ banner: NotchBanner) -> some View {
         Button { model.openBanner() } label: {
@@ -216,7 +236,7 @@ struct IslandView: View {
     private var topRow: some View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "terminal.fill").foregroundStyle(Palette.mint)
+                AppMark(size: 20)
                 Text("NotchAgent").font(.headline).lineLimit(1).fixedSize()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -238,7 +258,7 @@ struct IslandView: View {
         .frame(height: model.notchHeight)
     }
     private var preview: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.previewHeadline)
@@ -252,8 +272,8 @@ struct IslandView: View {
                 }.buttonStyle(MintButton())
             }
             QuickPromptField(model: model)
-            UsageStrip(service: model.usage, compact: false, showsAgent: model.claudeUsage.enabled)
-            if model.claudeUsage.enabled { ClaudeUsageStrip(service: model.claudeUsage, compact: false) }
+            PreviewUsageSummary(codex: model.usage, claude: model.claudeUsage)
+            RecentActivitiesView(model: model)
             HStack(spacing: 8) {
                 ForEach(AgentKind.allCases) { kind in
                     Button { model.launch(kind) } label: {
@@ -268,6 +288,7 @@ struct IslandView: View {
             }
             PreviewFolderFooter(model: model)
         }
+        .modifier(FolderDropTarget(model: model))
     }
     private var terminalPanel: some View {
         VStack(spacing: 12) {
@@ -322,11 +343,16 @@ struct IslandView: View {
                             Button { model.select(session) } label: {
                                 HStack(spacing: 6) {
                                     Circle().fill(session.attention.map(Palette.color(for:)) ?? (session.isRunning ? Palette.mint : Palette.muted)).frame(width: 5, height: 5)
-                                    Text(session.kind.name).fontWeight(.semibold)
-                                    Text(session.initialDirectory.lastPathComponent).foregroundStyle(Palette.muted).lineLimit(1)
+                                    if session.kind == .shell {
+                                        Image(systemName: "terminal").foregroundStyle(Palette.muted)
+                                    } else { AgentLogo(kind: session.kind, size: 12) }
+                                    Text(session.displayTitle).fontWeight(.semibold).lineLimit(1)
+                                        .truncationMode(.middle).frame(maxWidth: 220)
                                 }.contentShape(Rectangle())
                             }.buttonStyle(.plain)
-                            .accessibilityLabel(L("\(session.kind.name) 세션, \(session.initialDirectory.lastPathComponent)", "\(session.kind.name) session, \(session.initialDirectory.lastPathComponent)") + (session.ended ? L(", 종료됨", ", ended") : ""))
+                            .simultaneousGesture(TapGesture(count: 2).onEnded { model.renameSession(session) })
+                            .help("\(session.kind.name) · \(session.displayTitle)\n\(session.initialDirectory.path)\n" + L("더블클릭하여 이름 변경", "Double-click to rename"))
+                            .accessibilityLabel("\(session.kind.name), \(session.displayTitle), \(session.initialDirectory.lastPathComponent)" + (session.ended ? L(", 종료됨", ", ended") : ""))
                             .accessibilityAddTraits(model.selectedID == session.id ? .isSelected : [])
                             Button { model.closeSession(session) } label: {
                                 Image(systemName: "xmark").font(.system(size: 9)).frame(width: 16, height: 16).contentShape(Rectangle())
@@ -342,6 +368,12 @@ struct IslandView: View {
                             }
                         }
                         .id(session.id)
+                        .contextMenu {
+                            Button(L("이름 변경…", "Rename…")) { model.renameSession(session) }
+                            if session.customTitle != nil {
+                                Button(L("터미널 제목 사용", "Use Terminal Title")) { model.setSessionName(session, name: nil) }
+                            }
+                        }
                         .opacity(draggedTab == session.id ? 0.55 : 1)
                         .reorderable(session.id, dragging: $draggedTab) { model.moveSession($0, onto: $1) }
                         .transition(.scale(scale: 0.85).combined(with: .opacity))
@@ -781,73 +813,151 @@ struct QuickPromptField: View {
 /// Right wing of the closed notch. One item, chosen by `NotchStatus.resolve`.
 struct NotchStatusView: View {
     let status: NotchStatus
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Group {
             switch status {
             case .attention(let reason):
-                Image(systemName: reason == .bell ? "bell.fill" : reason == .finished ? "checkmark.circle.fill" : "stop.circle.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                Image(systemName: Self.symbol(for: reason))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Palette.color(for: reason))
                     .symbolEffect(.bounce, value: reason)
+                    .phaseAnimator(reason == .bell && !reduceMotion ? [1.0, 0.55] : [1.0]) { content, opacity in
+                        content.opacity(opacity) // a request "breathes" until it is seen
+                    } animation: { _ in .easeInOut(duration: 1.1) }
                     .accessibilityLabel(reason.message)
             case .working(let since):
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(NotchStatus.elapsed(since: since, now: context.date))
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(Palette.mint)
-                        .contentTransition(.numericText())
+                    if context.date.timeIntervalSince(since) < NotchStatus.clockAfter {
+                        WorkingDots()
+                    } else {
+                        Text(NotchStatus.elapsed(since: since, now: context.date))
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.white)
+                            .contentTransition(.numericText())
+                    }
                 }
                 .accessibilityLabel(L("작업 중", "Working"))
             case .lowQuota(let agent, let remaining):
-                HStack(spacing: 4) {
-                    ZStack {
-                        Circle().stroke(Color.white.opacity(0.15), lineWidth: 2)
-                        Circle().trim(from: 0, to: remaining / 100).stroke(Palette.low, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .frame(width: 11, height: 11)
-                    Text("\(Int(remaining))%").font(.caption2.monospacedDigit().weight(.bold)).foregroundStyle(Palette.low)
+                ZStack {
+                    Circle().stroke(Color.white.opacity(0.15), lineWidth: 2.2)
+                    Circle().trim(from: 0, to: remaining / 100).stroke(Palette.low, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
                 }
+                .frame(width: 13, height: 13)
                 .help(L("\(agent.name) 한도 \(Int(remaining))% 남음", "\(agent.name) limit: \(Int(remaining))% left"))
                 .accessibilityLabel(L("\(agent.name) 한도 \(Int(remaining))% 남음", "\(agent.name) limit: \(Int(remaining))% left"))
-            case .sessions(let count):
-                HStack(spacing: 5) {
-                    Text("\(count)").font(.caption.monospacedDigit().bold()).contentTransition(.numericText(value: Double(count)))
-                    Circle().fill(Palette.mint).frame(width: 5, height: 5)
-                }
+            case .sessions:
+                Circle().fill(Palette.muted).frame(width: 6, height: 6).accessibilityLabel(L("대기 중", "Idle"))
             case .empty:
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Palette.muted)
+                Color.clear
             }
         }
         .transition(.opacity.combined(with: .scale(scale: 0.8)))
         .animation(Motion.snappy, value: status)
     }
+    static func symbol(for reason: AttentionReason) -> String {
+        switch reason {
+        case .bell: "bell.fill"
+        case .finished: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        case .exited: "stop.circle.fill"
+        }
+    }
 }
 
-/// An agent's mark in the closed notch; breathes while the agent works, dotted when it wants you.
-struct SessionGlyph: View {
-    let session: TerminalSession
-    var size: CGFloat = 12
+/// Idle notch: an agent's icon inside a gauge ring filled to its remaining quota, optionally
+/// with the percentage. The icon already names the agent, so the ring is neutral white and
+/// only turns red at 20% or less.
+struct UsageBadge: View {
+    let usage: IdleUsage
+    let showsNumber: Bool
+    static func color(_ usage: IdleUsage) -> Color {
+        usage.remaining <= NotchStatus.lowQuotaThreshold ? Palette.low : Color.white.opacity(0.9)
+    }
+    static func percent(_ usage: IdleUsage) -> some View {
+        Text("\(Int(usage.remaining))%").font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(usage.remaining <= NotchStatus.lowQuotaThreshold ? Palette.low : Color.white)
+            .contentTransition(.numericText(value: usage.remaining))
+            .help(usage.agent.name + " · " + usage.window.title + L(" 남음", " left") + " · " + usage.window.resetLabel())
+    }
+    var body: some View {
+        HStack(spacing: 5) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.12), lineWidth: 2)
+                Circle().trim(from: 0, to: usage.remaining / 100)
+                    .stroke(Self.color(usage), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(Motion.snappy, value: usage.remaining)
+                SessionIcon(kind: usage.agent, size: 11)
+            }
+            .frame(width: 21, height: 21)
+            if showsNumber { Self.percent(usage) }
+        }
+        .help(usage.agent.name + " · " + usage.window.title + L(" \(Int(usage.remaining))% 남음 · ", " \(Int(usage.remaining))% left · ") + usage.window.resetLabel())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(usage.agent.name + " " + usage.window.title + L(" \(Int(usage.remaining))퍼센트 남음", " \(Int(usage.remaining)) percent left"))
+    }
+}
+
+/// "•••" flowing left to right while an agent works.
+struct WorkingDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        Group {
-            if session.kind == .shell {
-                Image(systemName: "terminal.fill").font(.system(size: size * 0.85)).foregroundStyle(Palette.mint)
-            } else {
-                AgentLogo(kind: session.kind, size: size)
+        TimelineView(.periodic(from: .now, by: 0.3)) { context in
+            let step = reduceMotion ? 0 : Int(context.date.timeIntervalSinceReferenceDate / 0.3) % 3
+            HStack(spacing: 3) {
+                ForEach(0..<3) { index in
+                    Circle().fill(Color.white.opacity(index == step ? 1 : 0.35)).frame(width: 4, height: 4)
+                }
             }
+        }
+    }
+}
+
+/// The agent's mark; Terminal sessions use the terminal symbol.
+struct SessionIcon: View {
+    let kind: AgentKind
+    var size: CGFloat = 14
+    var body: some View {
+        Group {
+            if kind == .shell {
+                Image(systemName: "terminal").font(.system(size: size * 0.8, weight: .semibold)).foregroundStyle(Color.white.opacity(0.85))
+            } else { AgentLogo(kind: kind, size: size) }
         }
         .frame(width: size, height: size)
-        // Cycles only while working; a single phase keeps it still.
-        .phaseAnimator(session.isWorking && !reduceMotion ? [1.0, 0.4] : [1.0]) { content, opacity in
-            content.opacity(opacity)
-        } animation: { _ in .easeInOut(duration: 0.9) }
-        .overlay(alignment: .topTrailing) {
-            if let reason = session.attention {
-                Circle().fill(Palette.color(for: reason)).frame(width: 5, height: 5).offset(x: 2, y: -2)
-            }
-        }
         .accessibilityHidden(true)
+    }
+}
+
+/// A session among several: its icon inside a ring whose color says its state. Working spins
+/// a white arc (so it never reads as "done" green); a request breathes; quiet has no ring.
+struct RingedSessionIcon: View {
+    let kind: AgentKind
+    let badge: NotchBadge
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spin = false
+    var body: some View {
+        ZStack {
+            switch badge {
+            case .quiet: EmptyView()
+            case .working:
+                Circle().trim(from: 0, to: 0.3)
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(spin ? 360 : 0))
+                    .animation(reduceMotion ? nil : .linear(duration: 1.1).repeatForever(autoreverses: false), value: spin)
+                    .onAppear { spin = true }
+            case .done: Circle().stroke(Palette.done, lineWidth: 2)
+            case .waiting:
+                Circle().stroke(Palette.attention, lineWidth: 2)
+                    .phaseAnimator(reduceMotion ? [1.0] : [1.0, 0.45]) { content, opacity in content.opacity(opacity) }
+                        animation: { _ in .easeInOut(duration: 1.1) }
+            case .error: Circle().stroke(Palette.low, lineWidth: 2)
+            }
+            SessionIcon(kind: kind, size: 12).opacity(badge == .quiet ? 0.5 : 1)
+        }
+        .frame(width: 22, height: 22)
+        .transition(.scale(scale: 0.6).combined(with: .opacity))
     }
 }
 

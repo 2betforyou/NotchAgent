@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventHandler: EventHandlerRef?
     private var screen: NSScreen?
     private var locked = false
+    private var activityNotifications: ActivityNotifications?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hosted unit tests must not register shortcuts, open windows, or start CLI processes.
@@ -97,6 +98,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.showSettings = { [weak self] in self?.showSettings() }
         model.runAlert = { [weak self] alert in self?.runAlert(alert) ?? alert.runModal() }
         model.beginQuickPrompt = { [weak self] in self?.beginQuickPrompt() }
+        model.layoutChanged = { [weak self] in self?.positionPanel() }
+        let notifications = ActivityNotifications()
+        activityNotifications = notifications
+        notifications.openSession = { [weak self] id in self?.model.openSession(id: id) }
+        model.activityOccurred = { [weak self] activity in
+            guard let self else { return }
+            self.activityNotifications?.deliver(activity, notification: self.model.systemNotificationsEnabled,
+                                                 sound: self.model.activitySoundEnabled)
+        }
+        model.notificationSettingsChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.model.notificationPermissionMessage = nil
+            if enabled {
+                Task { self.model.notificationPermissionMessage = await notifications.requestPermission() }
+            }
+        }
+        Task {
+            let message = await notifications.refreshPermission()
+            if model.systemNotificationsEnabled { model.notificationPermissionMessage = message }
+        }
         panel.onTabShortcut = { [weak self] key, shift in
             guard let self, self.model.phase == .terminal else { return false }
             return self.model.handleTabShortcut(key: key, shift: shift)
@@ -133,7 +154,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(screenUnlocked), name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
         schedulePointerTimer(PointerPolling.fast)
         activityTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.model.tickActivity() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.model.tickActivity(terminalIsVisible: self.panel.isKeyWindow && NSApp.isActive && !self.locked)
+            }
         }
         RunLoop.main.add(activityTimer!, forMode: .common)
         model.usage.start()
@@ -157,9 +181,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else { physicalWidth = 110 }
         model.compactWidth = physicalWidth + 100
         model.physicalNotchWidth = notch > 0 ? physicalWidth : 0
-        model.panelWidth = min(940, target.frame.width - 64)
-        model.panelHeight = min(620, target.frame.height - 100)
-        let size = NSSize(width: model.panelWidth + 32, height: model.panelHeight + 32)
+        let fitted = model.terminalSize.fitted(to: target.frame.size)
+        model.panelWidth = fitted.width
+        model.panelHeight = fitted.height
+        let size = NSSize(width: model.panelWidth + 32, height: model.hostHeight + 32)
         panel.setFrame(NSRect(x: target.frame.midX - size.width / 2, y: target.frame.maxY - size.height, width: size.width, height: size.height), display: true)
     }
     private var pointerInterval: TimeInterval = 0
@@ -225,13 +250,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(); panel.makeKeyAndOrderFront(nil)
         if let terminal = model.selected?.terminal { panel.makeFirstResponder(terminal) }
     }
-    @objc func collapse() {
+    @objc func collapse() { collapse(restoringFocus: true) }
+    private func collapse(restoringFocus: Bool) {
         let hadFocus = panel.isKeyWindow
         model.phase = .closed; panel.acceptsKeyboard = false
         panel.resignKey()
         hoverStart = nil; leaveStart = nil
-        if hadFocus, let previousApp, previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+        if restoringFocus, hadFocus, let previousApp, previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApp.activate(options: [])
+        }
+    }
+    func applicationDidResignActive(_ notification: Notification) {
+        guard panel != nil, model.collapseOnDeactivate, model.phase == .terminal else { return }
+        collapse(restoringFocus: false)
+    }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard let activityNotifications else { return }
+        Task {
+            let message = await activityNotifications.refreshPermission()
+            if model.systemNotificationsEnabled { model.notificationPermissionMessage = message }
         }
     }
     /// The island floats above the menu bar, which is also above modal windows. Without lowering
@@ -257,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func screenUnlocked() { locked = false; positionPanel(); panel.orderFrontRegardless() }
     private func installMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "NotchAgent")
+        statusItem.button?.image = MenuBarIcon.make()
         buildMenus()
         model.languageChanged = { [weak self] in
             self?.buildMenus()
@@ -348,12 +385,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Idle sessions are saved and come back next launch; only interrupting work needs a yes.
+        // Agent drafts are not restored, even when the CLI is waiting for input.
         let busy = model.sessions.filter(\.isBusy).count
         if busy > 0 {
             let alert = NSAlert()
             alert.messageText = L("NotchAgent를 종료할까요?", "Quit NotchAgent?")
-            alert.informativeText = L("작업 중인 \(busy)개의 세션이 중단됩니다.", "\(busy) session(s) that are working will stop.")
+            alert.informativeText = L("\(busy)개의 세션에서 입력 중인 내용이나 진행 중인 작업이 사라질 수 있습니다.", "Unsubmitted input or work in progress may be lost in \(busy) session(s).")
             alert.addButton(withTitle: L("취소", "Cancel")); alert.addButton(withTitle: L("종료", "Quit"))
             if runAlert(alert) != .alertSecondButtonReturn { return .terminateCancel }
         }

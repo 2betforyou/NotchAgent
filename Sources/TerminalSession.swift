@@ -6,6 +6,75 @@ import SwiftUI
 class AgentTerminalView: LocalProcessTerminalView {
     var onActivity: (() -> Void)?
     var onBell: (() -> Void)?
+    var onDropError: ((String) -> Void)?
+    static var fileDropTypes: [NSPasteboard.PasteboardType] {
+        let promises = NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+        return [.fileURL, .png, .tiff] + promises
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.availableType(from: Self.fileDropTypes) == nil ? [] : .copy
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        process.running && !draggingEntered(sender).isEmpty
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        acceptFileDrop(sender.draggingPasteboard)
+    }
+    private func droppedURLs(_ pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
+    @discardableResult func acceptFileDrop(_ pasteboard: NSPasteboard) -> Bool {
+        guard process.running else { return false }
+        let urls = droppedURLs(pasteboard)
+        if !urls.isEmpty { return insertDroppedFiles(urls) }
+        do {
+            let receivers = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver] ?? []
+            if !receivers.isEmpty {
+                let destination = try dropDirectory()
+                for receiver in receivers {
+                    receiver.receivePromisedFiles(atDestination: destination, options: [:], operationQueue: .main) { [weak self] url, error in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            if error != nil { self.reportDropFailure() }
+                            else { self.insertDroppedFiles([url]) }
+                        }
+                    }
+                }
+                return true
+            }
+            let png = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff)
+                .flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }
+            guard let png else { return false }
+            let file = try dropDirectory().appendingPathComponent("Dropped Image.png")
+            try png.write(to: file, options: .atomic)
+            return insertDroppedFiles([file])
+        } catch { reportDropFailure(); return false }
+    }
+    private func dropDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NotchAgent-Drops", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+    private func reportDropFailure() {
+        onDropError?(L("끌어놓은 파일을 가져오지 못했습니다. Finder에 저장한 뒤 다시 놓아 주세요.", "Could not import the dropped file. Save it in Finder and try again."))
+    }
+    @discardableResult func insertDroppedFiles(_ urls: [URL]) -> Bool {
+        guard process.running, let text = FileDrop.text(for: urls) else { return false }
+        if !markedText.isEmpty { insertText(markedText, replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        // Respect bracketed-paste mode without changing the user's clipboard.
+        let bracketed = getTerminal().bracketedPasteMode
+        if bracketed { send(txt: "\u{1b}[200~") }
+        send(txt: text)
+        if bracketed { send(txt: "\u{1b}[201~") }
+        if let window {
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(self)
+        }
+        return true
+    }
     // BEL is how CLIs ask for attention (approval prompts, finished turns).
     override func bell(source: Terminal) {
         super.bell(source: source)
@@ -104,6 +173,8 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     let initialDirectory: URL
     let startedAt = Date()
     private(set) var title: String
+    var customTitle: String?
+    var displayTitle: String { SessionName.clean(customTitle) ?? title }
     private(set) var directory: URL
     private(set) var exitCode: Int32?
     private(set) var ended = false
@@ -132,13 +203,15 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     static let scrollbackLines = 5_000
 
     init(kind: AgentKind, directory: URL, executable: String, fontSize: Double,
-         arguments: [String] = [], environment: [String: String] = [:]) {
+         arguments: [String] = [], environment: [String: String] = [:], title: String? = nil, customTitle: String? = nil) {
         self.kind = kind; self.initialDirectory = directory; self.directory = directory
         self.executable = executable; self.arguments = arguments; self.environment = environment
-        title = directory.lastPathComponent
+        self.title = SessionName.clean(title) ?? directory.lastPathComponent
+        self.customTitle = SessionName.clean(customTitle)
         terminal = AgentTerminalView(frame: NSRect(x: 0, y: 0, width: 848, height: 372))
         super.init()
         terminal.processDelegate = self
+        terminal.registerForDraggedTypes(AgentTerminalView.fileDropTypes)
         terminal.nativeBackgroundColor = NSColor(srgbRed: 0.035, green: 0.04, blue: 0.045, alpha: 1)
         terminal.nativeForegroundColor = NSColor(srgbRed: 0.88, green: 0.91, blue: 0.89, alpha: 1)
         terminal.caretColor = NSColor(srgbRed: 0.65, green: 0.96, blue: 0.72, alpha: 1)
@@ -201,13 +274,11 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         terminal.font = TerminalFont.font(appearance.font, size: appearance.size)
     }
     var isRunning: Bool { started && !ended }
-    /// Closing now would interrupt work: an agent is streaming output, or the shell is running
-    /// a command (its foreground process group is not the shell itself). Idle sessions close
-    /// without asking; the CLIs keep their conversations for /resume.
+    /// Agent input may be unsubmitted even while output is idle. Only an idle shell prompt
+    /// is safe to close without confirmation.
     var isBusy: Bool {
         guard isRunning else { return false }
-        if isWorking { return true }
-        guard kind == .shell else { return false }
+        if kind != .shell { return true }
         let fd = terminal.process.childfd
         let foreground = fd >= 0 ? tcgetpgrp(fd) : -1
         return foreground > 0 && foreground != terminal.process.shellPid
@@ -247,7 +318,10 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         if finished { lastFinishedAt = now }
         let bell = rang || pendingNeedsInput; rang = false; pendingNeedsInput = false
         var reason: AttentionReason?
-        if ended, started, !exitNoticed { exitNoticed = true; if !stopping { reason = .exited } }
+        if ended, started, !exitNoticed {
+            exitNoticed = true
+            if !stopping { reason = (exitCode ?? 0) == 0 ? .exited : .failed }
+        }
         else if bell { reason = .bell }
         else if finished { reason = .finished }
         if visible {
@@ -260,8 +334,7 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     func clearAttention() { if attention != nil { attention = nil } }
     nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
     nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        let clean = String(title.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
-        if !clean.isEmpty { Task { @MainActor [weak self] in self?.title = String(clean.prefix(90)) } }
+        if let clean = SessionName.clean(title) { Task { @MainActor [weak self] in self?.title = clean } }
     }
     nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         guard let directory, let url = URL(string: directory), url.isFileURL,

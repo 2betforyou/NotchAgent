@@ -42,6 +42,36 @@ final class TerminalSessionTests: XCTestCase {
     }
     private func noRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
 
+    func testDroppedFilePathsReachPTYWithoutSubmitting() throws {
+        let s = try lineReader(into: "out")
+        XCTAssertTrue(waitUntil { self.contents("ready") != nil })
+        let files = [directory.appendingPathComponent("screen shot.png"), directory.appendingPathComponent("it's a file.txt")]
+        XCTAssertTrue(s.terminal.insertDroppedFiles(files))
+        XCTAssertNil(contents("out"), "dropping must not submit the input")
+        s.terminal.send(txt: "\r")
+        XCTAssertTrue(waitUntil { self.contents("out") != nil })
+        XCTAssertEqual(contents("out"), FileDrop.text(for: files)! + "\n")
+    }
+    func testDroppedImageWithoutAFilePathIsSavedAndInserted() throws {
+        let s = try lineReader(into: "out")
+        XCTAssertTrue(waitUntil { self.contents("ready") != nil })
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("NotchAgentImageDrop-" + UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 4, bitsPerPixel: 32))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        pasteboard.setData(png, forType: .png)
+        XCTAssertTrue(s.terminal.acceptFileDrop(pasteboard))
+        s.terminal.send(txt: "\r")
+        XCTAssertTrue(waitUntil { self.contents("out") != nil })
+        let quoted = try XCTUnwrap(contents("out")).trimmingCharacters(in: .whitespacesAndNewlines)
+        let file = URL(fileURLWithPath: String(quoted.dropFirst().dropLast()))
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        XCTAssertEqual(file.lastPathComponent, "Dropped Image.png")
+        XCTAssertEqual(try Data(contentsOf: file), png)
+    }
+
     // MARK: Exit codes
 
     func testWaitStatusDecoding() {
@@ -242,13 +272,20 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(asked, 1, "an idle prompt closes without a question")
         XCTAssertTrue(model.sessions.isEmpty)
     }
-    func testAgentIsBusyOnlyWhileStreaming() throws {
+    func testRunningAgentAlwaysRequiresCloseConfirmation() throws {
         let agent = try session(running: "while true; do sleep 1; done") // an idle agent waiting for input
-        XCTAssertFalse(agent.isBusy)
+        XCTAssertTrue(agent.isBusy)
         agent.recordOutput(at: Date())
         _ = agent.tick(now: Date(), visible: true)
         XCTAssertTrue(agent.isBusy)
         _ = agent.tick(now: Date().addingTimeInterval(5), visible: true)
-        XCTAssertFalse(agent.isBusy)
+        XCTAssertTrue(agent.isBusy)
+        let model = AppModel()
+        model.sessions = [agent]
+        var asked = false
+        model.runAlert = { _ in asked = true; return .alertFirstButtonReturn }
+        model.closeSession(agent)
+        XCTAssertTrue(asked)
+        XCTAssertTrue(agent.isRunning)
     }
 }

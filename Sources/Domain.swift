@@ -2,6 +2,48 @@ import Foundation
 
 enum IslandPhase: Equatable { case closed, preview, terminal }
 
+enum TerminalSize: String, CaseIterable, Identifiable {
+    case small, standard, large
+    var id: String { rawValue }
+    var name: String {
+        switch self {
+        case .small: L("작게", "Small")
+        case .standard: L("기본", "Default")
+        case .large: L("크게", "Large")
+        }
+    }
+    var size: CGSize {
+        switch self {
+        case .small: CGSize(width: 760, height: 500)
+        case .standard: CGSize(width: 940, height: 620)
+        case .large: CGSize(width: 1180, height: 760)
+        }
+    }
+    func fitted(to screen: CGSize) -> CGSize {
+        CGSize(width: min(size.width, max(0, screen.width - 64)),
+               height: min(size.height, max(0, screen.height - 100)))
+    }
+}
+
+enum SessionName {
+    static func clean(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let clean = String(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return clean.isEmpty ? nil : String(clean.prefix(90))
+    }
+}
+
+enum FileDrop {
+    /// A drop inserts shell-safe paths without submitting a command. Control characters in
+    /// filenames cannot safely be entered into an interactive terminal, so reject those paths.
+    static func text(for urls: [URL]) -> String? {
+        guard !urls.isEmpty, urls.allSatisfy({ $0.isFileURL &&
+            $0.path.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) } }) else { return nil }
+        return urls.map { ShellSafety.quote($0.path) }.joined(separator: " ") + " "
+    }
+}
+
 enum AgentKind: String, CaseIterable, Identifiable, Codable {
     case shell, codex, claude, gemini
     var id: String { rawValue }
@@ -74,11 +116,14 @@ enum HoverSpeed: String, CaseIterable, Identifiable {
 }
 
 enum AttentionReason: Equatable {
-    case finished, bell, exited
-    /// Which one to show when several sessions want attention: a question beats a result.
+    /// `exited` is a clean exit (code 0); `failed` is a non-zero exit or a crash.
+    case finished, bell, exited, failed
+    /// Which one to show when several sessions want attention: a question beats an error,
+    /// an error beats a result.
     var priority: Int {
         switch self {
-        case .bell: 3
+        case .bell: 4
+        case .failed: 3
         case .finished: 2
         case .exited: 1
         }
@@ -88,6 +133,64 @@ enum AttentionReason: Equatable {
         case .finished: L("작업을 마쳤어요", "finished")
         case .bell: L("확인이 필요해요", "needs you")
         case .exited: L("세션이 종료됐어요", "session ended")
+        case .failed: L("오류로 종료됐어요", "exited with an error")
+        }
+    }
+}
+
+/// A session's state as the closed notch shows it (a colored ring when several are shown).
+enum NotchBadge: Equatable {
+    case quiet, working, done, waiting, error
+    init(attention: AttentionReason?, working: Bool) {
+        switch attention {
+        case .bell?: self = .waiting
+        case .failed?: self = .error
+        case .finished?: self = .done
+        case .exited?, nil: self = working ? .working : .quiet
+        }
+    }
+}
+
+/// Where sessions sit around the camera in the closed notch. Nothing to show hides the wings;
+/// one session gets an icon on the left and a status symbol on the right; several are split
+/// over both wings (left gets the extra one), each with a colored ring.
+/// An agent's binding quota: the smaller remaining share of its limits (the one that runs out first).
+struct IdleUsage: Equatable {
+    let agent: AgentKind
+    let remaining: Double
+    let window: UsageWindow
+    init?(agent: AgentKind, snapshot: UsageSnapshot?) {
+        guard let window = snapshot?.windows.min(by: { $0.remaining < $1.remaining }) else { return nil }
+        self.agent = agent; self.remaining = window.remaining; self.window = window
+    }
+}
+
+enum ClosedNotchLayout: Equatable {
+    case idle
+    /// No sessions: each agent's remaining quota (Codex left, Claude right).
+    case usage([IdleUsage])
+    case single(UUID)
+    case multi(left: [UUID], right: [UUID])
+
+    static let singleWing: CGFloat = 44
+    static let iconPitch: CGFloat = 26
+
+    static func make(_ ids: [UUID]) -> ClosedNotchLayout {
+        switch ids.count {
+        case 0: return .idle
+        case 1: return .single(ids[0])
+        default:
+            let leftCount = (ids.count + 1) / 2
+            return .multi(left: Array(ids.prefix(leftCount)), right: Array(ids.dropFirst(leftCount)))
+        }
+    }
+    /// Both wings share one width so the island stays centered on the camera.
+    var wingWidth: CGFloat {
+        switch self {
+        case .idle: 0
+        case .usage(let items): items.count > 1 ? 84 : Self.singleWing
+        case .single: Self.singleWing
+        case .multi(let left, let right): CGFloat(max(left.count, right.count)) * Self.iconPitch + 16
         }
     }
 }
@@ -108,6 +211,8 @@ struct SavedSession: Codable, Equatable {
     let path: String
     /// The CLI's own conversation id, when it reported one; resumes that exact chat.
     var conversation: String? = nil
+    var title: String? = nil
+    var customTitle: String? = nil
 }
 
 enum SessionRestore {
@@ -162,6 +267,8 @@ enum NotchStatus: Equatable {
         }
         return running > 0 ? .sessions(running) : .empty
     }
+    /// Short jobs show a quiet "•••"; the clock appears once work has run this long.
+    static let clockAfter: TimeInterval = 60
     /// "2:31" under an hour, "1h04" after that; fits the narrow notch wing.
     static func elapsed(since start: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(start)))
@@ -176,6 +283,23 @@ struct NotchBanner: Equatable {
     let reason: AttentionReason
     let folder: String
     let shownAt: Date
+}
+
+struct RecentActivity: Identifiable, Equatable {
+    let id: UUID
+    let sessionID: UUID
+    let kind: AgentKind
+    let title: String
+    let folder: String
+    let reason: AttentionReason
+    let date: Date
+    var isRead = false
+
+    init(sessionID: UUID, kind: AgentKind, title: String, folder: String,
+         reason: AttentionReason, date: Date, id: UUID = UUID()) {
+        self.id = id; self.sessionID = sessionID; self.kind = kind
+        self.title = title; self.folder = folder; self.reason = reason; self.date = date
+    }
 }
 
 /// Infers "working" and "just finished" from output timing. Agents stream spinners and text

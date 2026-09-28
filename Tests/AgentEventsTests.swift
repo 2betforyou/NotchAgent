@@ -26,9 +26,9 @@ final class AgentEventsTests: XCTestCase {
         [tui]
         notify = ["not-top-level"]
         """
-        XCTAssertEqual(AgentEvents.userCodexNotify(configText: config), ["/Applications/My App.app/bin/client", "turn-ended", "say \"hi\""])
-        XCTAssertNil(AgentEvents.userCodexNotify(configText: "[tui]\nnotify = [\"x\"]"))
-        XCTAssertNil(AgentEvents.userCodexNotify(configText: "notify_other = [\"x\"]"))
+        XCTAssertEqual(AgentEvents.userCodexNotify(configText: config), .command(["/Applications/My App.app/bin/client", "turn-ended", "say \"hi\""]))
+        XCTAssertEqual(AgentEvents.userCodexNotify(configText: "[tui]\nnotify = [\"x\"]"), .absent)
+        XCTAssertEqual(AgentEvents.userCodexNotify(configText: "notify_other = [\"x\"]"), .absent)
     }
     func testOverridesAreWellFormed() throws {
         XCTAssertEqual(AgentEvents.codexNotifyOverride(executable: "/A B/Notch\"Agent"),
