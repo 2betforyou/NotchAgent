@@ -32,6 +32,8 @@ final class AppModel {
     var preferredDisplay: String { didSet { defaults.set(preferredDisplay, forKey: "display") } }
     var terminalSize: TerminalSize { didSet { defaults.set(terminalSize.rawValue, forKey: "terminalSize"); layoutChanged?() } }
     var collapseOnDeactivate: Bool { didSet { defaults.set(collapseOnDeactivate, forKey: "collapseOnDeactivate") } }
+    /// While every open session is quiet, the closed notch shows remaining usage instead of session icons.
+    var quietNotchShowsUsage: Bool { didSet { defaults.set(quietNotchShowsUsage, forKey: "quietNotchShowsUsage") } }
     @ObservationIgnored var layoutChanged: (() -> Void)?
     var hotkey: Hotkey {
         didSet { if let data = try? JSONEncoder().encode(hotkey) { defaults.set(data, forKey: "hotkey") } }
@@ -97,6 +99,7 @@ final class AppModel {
         preferredDisplay = d.string(forKey: "display") ?? "builtin"
         terminalSize = d.string(forKey: "terminalSize").flatMap(TerminalSize.init(rawValue:)) ?? .standard
         collapseOnDeactivate = d.bool(forKey: "collapseOnDeactivate")
+        quietNotchShowsUsage = d.object(forKey: "quietNotchShowsUsage") as? Bool ?? true
         notifyEnabled = d.object(forKey: "notifyEnabled") as? Bool ?? true
         systemNotificationsEnabled = d.bool(forKey: "systemNotificationsEnabled")
         activitySoundEnabled = d.bool(forKey: "activitySoundEnabled")
@@ -178,10 +181,13 @@ final class AppModel {
     }
     /// Sessions the closed notch shows, in tab order: running ones and ended ones not yet seen.
     var notchSessions: [TerminalSession] { sessions.filter { $0.isRunning || $0.attention != nil } }
+    /// Usage when nothing needs a look: no sessions, or (by default) only quiet ones. A session
+    /// that is working or needs attention always takes the notch.
     var closedLayout: ClosedNotchLayout {
-        let layout = ClosedNotchLayout.make(notchSessions.map(\.id))
-        guard layout == .idle, !idleUsages.isEmpty else { return layout }
-        return .usage(idleUsages)
+        let shown = notchSessions
+        let quiet = shown.allSatisfy { !$0.isWorking && $0.attention == nil }
+        if quiet, shown.isEmpty || quietNotchShowsUsage, !idleUsages.isEmpty { return .usage(idleUsages) }
+        return ClosedNotchLayout.make(shown.map(\.id))
     }
     /// Remaining quota per agent for the idle notch; only agents whose usage display is on.
     var idleUsages: [IdleUsage] {

@@ -178,7 +178,7 @@ final class ReadmeImagesTests: XCTestCase {
             }
             rows.append((label, note, strip))
         }
-        try closed(L("대기", "Idle"), L("에이전트별 남은 사용량", "Remaining quota per agent")) { _ in }
+        try closed(L("대기", "Idle"), L("링: 주간 한도 · 숫자: 5시간 한도", "Ring: weekly limit · number: 5-hour limit")) { _ in }
         try closed(L("작업 중", "Working"), L("경과 시간 (1분 전까지는 •••)", "Elapsed time (••• for the first minute)")) { m in
             let s = try session(.claude, folder: folders[0], title: "task"); s.start()
             for x in stride(from: 150.0, through: 0, by: -1.5) { s.recordOutput(at: Date().addingTimeInterval(-x)) }

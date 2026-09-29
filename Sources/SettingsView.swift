@@ -42,6 +42,8 @@ struct SettingsView: View {
                 Picker(L("호버 반응 속도", "Hover delay"), selection: $model.hoverSpeed) {
                     ForEach(HoverSpeed.allCases) { Text($0.label).tag($0) }
                 }.disabled(!model.hoverEnabled)
+                Toggle(L("세션이 쉬고 있을 때 노치에 사용량 표시", "Show usage in the notch while sessions are idle"), isOn: $model.quietNotchShowsUsage)
+                    .help(L("작업 중이거나 확인이 필요한 세션이 있으면 세션 상태가 먼저 표시됩니다.", "A session that is working or needs you is always shown first."))
                 Picker(L("큰 화면 크기", "Terminal size"), selection: $model.terminalSize) {
                     ForEach(TerminalSize.allCases) { Text($0.name).tag($0) }
                 }

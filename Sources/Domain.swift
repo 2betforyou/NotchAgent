@@ -154,14 +154,21 @@ enum NotchBadge: Equatable {
 /// Where sessions sit around the camera in the closed notch. Nothing to show hides the wings;
 /// one session gets an icon on the left and a status symbol on the right; several are split
 /// over both wings (left gets the extra one), each with a colored ring.
-/// An agent's binding quota: the smaller remaining share of its limits (the one that runs out first).
+/// An agent's quota for the idle notch: the ring shows the weekly limit, the number the 5-hour one.
+/// Limits are told apart by length; with a single limit, both show it.
 struct IdleUsage: Equatable {
     let agent: AgentKind
-    let remaining: Double
-    let window: UsageWindow
+    /// The shortest limit (5-hour), shown as the percentage.
+    let session: UsageWindow
+    /// The longest limit (weekly), shown as the ring.
+    let weekly: UsageWindow
     init?(agent: AgentKind, snapshot: UsageSnapshot?) {
-        guard let window = snapshot?.windows.min(by: { $0.remaining < $1.remaining }) else { return nil }
-        self.agent = agent; self.remaining = window.remaining; self.window = window
+        // Unknown lengths sort by id, so "primary" counts as the shorter limit.
+        let windows = (snapshot?.windows ?? []).sorted {
+            ($0.durationMinutes ?? ($0.id == "primary" ? 0 : .max), $0.id) < ($1.durationMinutes ?? ($1.id == "primary" ? 0 : .max), $1.id)
+        }
+        guard let session = windows.first, let weekly = windows.last else { return nil }
+        self.agent = agent; self.session = session; self.weekly = weekly
     }
 }
 

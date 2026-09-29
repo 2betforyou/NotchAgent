@@ -865,37 +865,40 @@ struct NotchStatusView: View {
     }
 }
 
-/// Idle notch: an agent's icon inside a gauge ring filled to its remaining quota, optionally
-/// with the percentage. The icon already names the agent, so the ring is neutral white and
-/// only turns red at 20% or less.
+/// Idle notch: an agent's icon inside a ring filled to the weekly quota left, optionally with
+/// the 5-hour quota left as a number. The icon already names the agent, so ring and number are
+/// neutral white and each turns red on its own at 20% or less.
 struct UsageBadge: View {
     let usage: IdleUsage
     let showsNumber: Bool
-    static func color(_ usage: IdleUsage) -> Color {
-        usage.remaining <= NotchStatus.lowQuotaThreshold ? Palette.low : Color.white.opacity(0.9)
+    private static func color(_ window: UsageWindow, normal: Color) -> Color {
+        window.remaining <= NotchStatus.lowQuotaThreshold ? Palette.low : normal
+    }
+    private static func left(_ window: UsageWindow) -> String {
+        window.title + L(" \(Int(window.remaining))% 남음", " \(Int(window.remaining))% left")
     }
     static func percent(_ usage: IdleUsage) -> some View {
-        Text("\(Int(usage.remaining))%").font(.caption.monospacedDigit().weight(.semibold))
-            .foregroundStyle(usage.remaining <= NotchStatus.lowQuotaThreshold ? Palette.low : Color.white)
-            .contentTransition(.numericText(value: usage.remaining))
-            .help(usage.agent.name + " · " + usage.window.title + L(" 남음", " left") + " · " + usage.window.resetLabel())
+        Text("\(Int(usage.session.remaining))%").font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(color(usage.session, normal: .white))
+            .contentTransition(.numericText(value: usage.session.remaining))
+            .help(usage.agent.name + " · " + left(usage.session) + " · " + usage.session.resetLabel())
     }
     var body: some View {
         HStack(spacing: 5) {
             ZStack {
                 Circle().stroke(Color.white.opacity(0.12), lineWidth: 2)
-                Circle().trim(from: 0, to: usage.remaining / 100)
-                    .stroke(Self.color(usage), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                Circle().trim(from: 0, to: usage.weekly.remaining / 100)
+                    .stroke(Self.color(usage.weekly, normal: Color.white.opacity(0.9)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .animation(Motion.snappy, value: usage.remaining)
+                    .animation(Motion.snappy, value: usage.weekly.remaining)
                 SessionIcon(kind: usage.agent, size: 11)
             }
             .frame(width: 21, height: 21)
+            .help(usage.agent.name + " · " + Self.left(usage.weekly) + " · " + usage.weekly.resetLabel())
             if showsNumber { Self.percent(usage) }
         }
-        .help(usage.agent.name + " · " + usage.window.title + L(" \(Int(usage.remaining))% 남음 · ", " \(Int(usage.remaining))% left · ") + usage.window.resetLabel())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(usage.agent.name + " " + usage.window.title + L(" \(Int(usage.remaining))퍼센트 남음", " \(Int(usage.remaining)) percent left"))
+        .accessibilityLabel(usage.agent.name + ", " + Self.left(usage.session) + ", " + Self.left(usage.weekly))
     }
 }
 

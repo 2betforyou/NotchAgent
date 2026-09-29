@@ -60,10 +60,14 @@ final class ClosedNotchTests: XCTestCase {
             UsageWindow(id: index == 0 ? "primary" : "secondary", usedPercent: value, durationMinutes: index == 0 ? 300 : 10080, resetsAt: nil)
         }, fetchedAt: Date())
     }
-    func testIdleUsageShowsTheLimitThatRunsOutFirst() throws {
+    func testIdleUsageRingIsWeeklyAndNumberIsFiveHour() throws {
         let usage = try XCTUnwrap(IdleUsage(agent: .claude, snapshot: snapshot([24, 85])))
-        XCTAssertEqual(usage.remaining, 15, "weekly (15% left) binds before 5-hour (76% left)")
-        XCTAssertEqual(usage.window.durationMinutes, 10080)
+        XCTAssertEqual(usage.session.remaining, 76, "the number: 5-hour limit")
+        XCTAssertEqual(usage.weekly.remaining, 15, "the ring: weekly limit")
+        let reversed = UsageSnapshot(windows: snapshot([24, 85]).windows.reversed(), fetchedAt: Date())
+        XCTAssertEqual(IdleUsage(agent: .claude, snapshot: reversed), usage, "picked by length, not order")
+        let single = try XCTUnwrap(IdleUsage(agent: .codex, snapshot: snapshot([40])))
+        XCTAssertEqual(single.session, single.weekly, "one limit: ring and number both show it")
         XCTAssertNil(IdleUsage(agent: .codex, snapshot: nil))
         XCTAssertNil(IdleUsage(agent: .codex, snapshot: snapshot([])))
     }
@@ -80,5 +84,22 @@ final class ClosedNotchTests: XCTestCase {
         session.start(); defer { session.stop() }
         model.sessions = [session]
         XCTAssertEqual(model.closedLayout, .single(session.id), "a session takes over the notch")
+    }
+    func testQuietSessionsKeepShowingUsage() throws {
+        let suite = "NotchAgent.quiet." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let codex = UsageService(snapshot: snapshot([32, 58])); codex.enabled = true
+        let model = AppModel(defaults: defaults, usage: codex)
+        model.claudeUsage.enabled = false
+        let tabs = (0..<2).map { _ in TerminalSession(kind: .codex, directory: URL(fileURLWithPath: "/tmp"), executable: "/bin/zsh", fontSize: 13) }
+        tabs.forEach { $0.start() }; defer { TerminalSession.stopAll(tabs, grace: 0.2) }
+        model.sessions = tabs
+        guard case .usage = model.closedLayout else { return XCTFail("quiet sessions: usage stays by default") }
+        model.quietNotchShowsUsage = false
+        XCTAssertEqual(model.closedLayout, .multi(left: [tabs[0].id], right: [tabs[1].id]), "setting off: session icons")
+        model.quietNotchShowsUsage = true
+        tabs[1].terminal.onBell?(); _ = tabs[1].tick(now: Date(), visible: false)
+        XCTAssertEqual(model.closedLayout, .multi(left: [tabs[0].id], right: [tabs[1].id]), "a session needing you takes the notch")
     }
 }
