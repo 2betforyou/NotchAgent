@@ -52,16 +52,27 @@ extension CaretView {
             let runGlyphsCount = CTRunGetGlyphCount(run)
             let runAttributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any] ?? [:]
             let runFont = runAttributes[.font] as! TTFont
+            let ctRunFont = runFont as CTFont
 
             let runGlyphs = [CGGlyph](unsafeUninitializedCapacity: runGlyphsCount) { (bufferPointer, count) in
                 CTRunGetGlyphs(run, CFRange(), bufferPointer.baseAddress!)
                 count = runGlyphsCount
             }
 
-            var positions = runGlyphs.enumerated().map { (i: Int, glyph: CGGlyph) -> CGPoint in
-                CGPoint(x: 0, y: yOffset)
+            let fits = runGlyphs.map { terminal.glyphSlotFit(font: ctRunFont, glyph: $0, columnWidth: glyphColumnWidth) }
+            var positions = fits.map { CGPoint(x: $0.dx, y: yOffset + $0.dy) }
+            if fits.contains(where: { $0.scale != 1 }) {
+                for i in 0..<runGlyphsCount {
+                    let scale = fits[i].scale
+                    let drawFont: CTFont = scale == 1 ? ctRunFont
+                        : CTFontCreateCopyWithAttributes(ctRunFont, CTFontGetSize(ctRunFont) * scale, nil, nil)
+                    var glyph = runGlyphs[i]
+                    var position = positions[i]
+                    CTFontDrawGlyphs(drawFont, &glyph, &position, 1, context)
+                }
+            } else {
+                CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
             }
-            CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
         }
         context.restoreGState()
     }

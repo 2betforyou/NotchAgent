@@ -16,6 +16,7 @@ import CoreGraphics
 class CaretView: UIView {
     weak var terminal: TerminalView?
     var ctline: CTLine?
+    var glyphColumnWidth = 1
     var bgColor: CGColor
     var tracksFocus = true
     
@@ -78,6 +79,7 @@ class CaretView: UIView {
     }
     
     func setText (ch: CharData) {
+        glyphColumnWidth = max(1, Int(ch.width))
         let character = terminal?.terminal.getCharacter(for: ch) ?? " "
         let res = NSAttributedString (
             string: String (character),

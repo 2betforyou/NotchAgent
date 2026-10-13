@@ -1151,15 +1151,19 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                             continue
                         }
                         let ctPos = glyphRun.positions[i]
-                        let basePos = CGPoint(x: ctPos.x + xOffset,
-                                              y: lineOrigin.y + yOffset + ctPos.y)
-                        let pxX = basePos.x * scale + entry.bearing.x
-                        let pxY = basePos.y * scale + entry.bearing.y
+                        let fit = shaped.segment.columnWidth >= 2
+                            ? terminalView.glyphSlotFit(font: glyphRun.font, glyph: glyph,
+                                                        columnWidth: shaped.segment.columnWidth)
+                            : GlyphSlotFit.identity
+                        let basePos = CGPoint(x: ctPos.x + xOffset + fit.dx,
+                                              y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
+                        let pxX = basePos.x * scale + entry.bearing.x * fit.scale
+                        let pxY = basePos.y * scale + entry.bearing.y * fit.scale
 
                         let x0 = pxX
                         let y0 = pxY
-                        let x1 = pxX + entry.size.width
-                        let y1 = pxY + entry.size.height
+                        let x1 = pxX + entry.size.width * fit.scale
+                        let y1 = pxY + entry.size.height * fit.scale
                         let (tx0, ty0, tx1, ty1) = transformRect(x0: x0, y0: y0, x1: x1, y1: y1)
 
                         let atlasSize = entry.atlasKind == .color ? colorAtlas.size : grayscaleAtlas.size
@@ -2068,10 +2072,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let cellWidthPx = cellWidth * scale
         let cellHeightPx = cellHeight * scale
         let doublePosition: CGFloat = buffer.lines[cursorRow].renderMode == .single ? 1.0 : 2.0
+        let cursorColumnWidth = CGFloat(max(1, Int(buffer.lines[cursorRow][buffer.x].width)))
 
         let x0 = lineOriginPx.x + CGFloat(buffer.x) * cellWidthPx * doublePosition
         let y0 = lineOriginPx.y
-        let x1 = x0 + cellWidthPx
+        let x1 = x0 + cellWidthPx * doublePosition * cursorColumnWidth
         let y1 = y0 + cellHeightPx
 
         #if os(macOS)
@@ -2178,14 +2183,16 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     continue
                 }
                 let ctPos = coreTextPositions[i]
-                let basePos = CGPoint(x: ctPos.x + xOffset,
-                                      y: lineOrigin.y + yOffset + ctPos.y)
-                let pxX = basePos.x * scale + entry.bearing.x
-                let pxY = basePos.y * scale + entry.bearing.y
+                let fit = terminalView.glyphSlotFit(font: ctFont, glyph: glyph,
+                                                    columnWidth: max(1, Int(charData.width)))
+                let basePos = CGPoint(x: ctPos.x + xOffset + fit.dx * doublePosition,
+                                      y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
+                let pxX = basePos.x * scale + entry.bearing.x * fit.scale
+                let pxY = basePos.y * scale + entry.bearing.y * fit.scale
                 let x0 = Float(pxX)
                 let y0 = Float(pxY)
-                let x1 = x0 + Float(entry.size.width)
-                let y1 = y0 + Float(entry.size.height)
+                let x1 = x0 + Float(entry.size.width * fit.scale)
+                let y1 = y0 + Float(entry.size.height * fit.scale)
 
                 let atlasSize = entry.atlasKind == .color ? colorAtlas.size : grayscaleAtlas.size
                 let u0 = Float(entry.region.x) / Float(atlasSize)

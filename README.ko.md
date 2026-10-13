@@ -13,7 +13,7 @@ _앱 UI에 샘플 데이터를 넣어 렌더링한 화면입니다._
 ## 주요 기능
 
 - **노치에 붙는 작업 공간**: 실제 노치 위치에 정렬되며, 메뉴바 높이부터 내용을 쓰되 카메라가 있는 가운데만 비워 둡니다. 노치가 없는 화면에서는 상단 중앙에 가상 노치를 표시합니다. 펼치고 접는 동작은 다이내믹 아일랜드처럼 부드럽게 움직입니다.
-- **네이티브 터미널**: [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) 기반. 256색·트루컬러, TUI, 5,000줄 스크롤백, 한글 입력기 조합, `⌘`+클릭으로 링크 열기, `⌘F` 검색을 지원합니다.
+- **네이티브 터미널**: [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) 기반. 256색·트루컬러, TUI, 5,000줄 스크롤백, 한글 입력기 조합, `⌘`+클릭으로 링크 열기, `⌘F` 검색을 지원합니다. Codex는 `--no-alt-screen`으로 실행해 한글 출력의 화면 다시 그리기 문제를 피합니다.
 - **에이전트 실행**: Terminal, Codex, Claude Code, Gemini CLI를 한 번에 시작합니다. 최대 8개 세션을 동시에 유지하며, 노치를 접어도 세션은 계속 실행됩니다.
 - **알아보기 쉬운 탭**: CLI가 보내는 작업 제목을 표시합니다. 탭을 더블클릭하거나 우클릭해 직접 이름을 정할 수 있으며, 이름은 세션과 함께 복원됩니다.
 - **파일·폴더 끌어놓기**: 터미널에 파일이나 이미지를 놓으면 경로만 입력됩니다. 노치나 미리보기, 큰 화면 상단에 폴더를 놓으면 작업 폴더로 추가하고 바로 전환합니다.
@@ -45,7 +45,7 @@ _앱 UI에 샘플 데이터를 넣어 렌더링한 화면입니다._
 
 ### 릴리스에서 받기
 
-[Releases](../../releases)에서 최신 DMG를 받아 `NotchAgent.app`을 응용 프로그램 폴더로 옮긴 뒤 실행하세요.
+[Releases](../../releases)에서 최신 DMG 또는 ZIP을 받아 `NotchAgent.app`을 응용 프로그램 폴더로 옮긴 뒤 실행하세요. 해당 빌드의 Apple 공증 여부는 릴리스 노트를 확인하세요.
 
 현재 빌드는 아직 Apple 공증을 받지 않아 처음 실행할 때 macOS가 막습니다. 앱을 한 번 연 뒤 시스템 설정 → 개인정보 보호 및 보안에서 NotchAgent 옆의 **그래도 열기**를 누르세요. 처음 한 번만 하면 됩니다.
 
@@ -58,12 +58,14 @@ git clone <this-repo>
 cd NotchAgents
 bash Scripts/build.sh      # Release 빌드
 bash Scripts/test.sh       # 테스트
-bash Scripts/package.sh    # Dist/ 에 앱과 ZIP 생성 (로컬 ad-hoc 서명)
+bash Scripts/package.sh    # Dist/ 에 버전별 ZIP과 SHA-256 체크섬 생성 (로컬 ad-hoc 서명)
 ```
 
 또는 `NotchAgent.xcodeproj`를 열고 **NotchAgent** 스킴 → **My Mac** → Run.
 
 빌드 캐시는 `/private/tmp/NotchAgent-build-<uid>`에 둡니다(`NOTCHAGENT_BUILD_DIR`로 변경). iCloud로 동기화되는 폴더의 파일 속성이 코드 서명을 방해하는 문제를 피하기 위해서입니다.
+
+GitHub에 올릴 때는 [v0.1.1 릴리스 체크리스트](docs/releases/v0.1.1.md)를 참고하세요. Developer ID 인증서와 공증 프로필이 있으면 `Scripts/release.sh`가 서명·공증된 DMG를 만들고, 없으면 `Scripts/package.sh`가 실행 중인 `Dist/NotchAgent.app`을 건드리지 않고 공증되지 않은 ZIP을 만듭니다.
 
 ## 사용법
 

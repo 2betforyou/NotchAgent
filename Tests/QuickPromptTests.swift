@@ -10,12 +10,11 @@ final class QuickPromptTests: XCTestCase {
         XCTAssertEqual(SessionRestore.initialPromptArguments(for: .claude, prompt: "-v 옵션 설명"), [" -v 옵션 설명"], "not parsed as a flag")
     }
     func testSubmittingStartsTheChosenAgentInTheCurrentFolder() throws {
-        let d = UserDefaults.standard
-        let keys = ["codexPath", "quickAgent", "workspace", "workspaces", "savedSessions"]
-        let saved = keys.map { d.object(forKey: $0) }
-        defer { for (k, v) in zip(keys, saved) { d.set(v, forKey: k) } }
+        let suite = "NotchAgent.QuickPromptTests." + UUID().uuidString
+        let d = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { d.removePersistentDomain(forName: suite) }
         d.set("/bin/echo", forKey: "codexPath") // stands in for codex; never started by this test
-        let model = AppModel()
+        let model = AppModel(defaults: d)
         let folder = Workspaces.normalize(FileManager.default.temporaryDirectory.path)
         model.workspaces = [SavedWorkspace(path: folder)]
         model.activateWorkspace(folder)
@@ -28,7 +27,8 @@ final class QuickPromptTests: XCTestCase {
         XCTAssertEqual(session.kind, .codex)
         XCTAssertEqual(session.commandLine.first, "/bin/echo")
         XCTAssertEqual(session.commandLine.last, "README 요약해줘", "the prompt comes last")
-        XCTAssertEqual(session.commandLine[1], "-c", "Codex also gets NotchAgent's notify hook")
+        XCTAssertEqual(session.commandLine[1], "--no-alt-screen", "Codex uses inline terminal mode")
+        XCTAssertEqual(session.commandLine[2], "-c", "Codex also gets NotchAgent's notify hook")
         XCTAssertEqual(Workspaces.normalize(session.initialDirectory.path), folder)
         XCTAssertFalse(model.quickPromptActive)
         XCTAssertTrue(opened, "the terminal opens on the new session")

@@ -1149,6 +1149,16 @@ public final class Buffer {
             let available = right - _x + 1
             let runLen = min(available, bytes.endIndex - idx)
             let row = _lines[_y + _yBase]
+            // The ASCII fast path bypasses insertCharacter, so it must repair
+            // wide-glyph boundaries before replacing the contiguous run.
+            let blank = CharData(attribute: attribute)
+            if _x > 0 && row[_x].width == 0 && row[_x - 1].width == 2 {
+                row[_x - 1] = blank
+            }
+            let lastOverwritten = _x + runLen - 1
+            if lastOverwritten < right && row[lastOverwritten].width == 2 {
+                row[lastOverwritten + 1] = blank
+            }
             for i in 0..<runLen {
                 row[_x + i] = CharData(attribute: attribute, code: Int32(bytes[idx + i]), size: 1)
             }
@@ -1210,6 +1220,20 @@ public final class Buffer {
             let lastCell = bufferRow [_cols - 1]
             if lastCell.width == 2 {
                 bufferRow [_cols - 1] = empty
+            }
+        }
+
+        // A narrow overwrite may replace either half of a two-cell glyph. Clear
+        // the untouched half too, otherwise its old attributes (often inverse
+        // video in TUIs) remain as a colored block or hide the new character.
+        if chWidth > 0 {
+            let blank = CharData(attribute: curAttr)
+            if _x > 0 && bufferRow[_x].width == 0 && bufferRow[_x - 1].width == 2 {
+                bufferRow[_x - 1] = blank
+            }
+            let lastOverwritten = min(_x + chWidth - 1, right)
+            if lastOverwritten < right && bufferRow[lastOverwritten].width == 2 {
+                bufferRow[lastOverwritten + 1] = blank
             }
         }
 

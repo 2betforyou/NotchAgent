@@ -2169,12 +2169,62 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    private var alternateScreenWheelRemainder: CGFloat = 0
+    private var scrollbackWheelRemainder: CGFloat = 0
+
     public override func scrollWheel(with event: NSEvent) {
-        if event.deltaY == 0 {
+        if event.scrollingDeltaY == 0 {
             return
         }
-        let velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))
-        if event.deltaY > 0 {
+        // Full-screen TUIs use the alternate buffer, which has no local scrollback.
+        // Forward wheel presses when the client requested mouse reporting; otherwise
+        // use the same Page Up/Down sequences as the keyboard.
+        if terminal.isDisplayBufferAlternate {
+            let delta = event.hasPreciseScrollingDeltas
+                ? event.scrollingDeltaY / max(cellDimension.height, 1)
+                : event.scrollingDeltaY
+            if alternateScreenWheelRemainder != 0 && (alternateScreenWheelRemainder > 0) != (delta > 0) {
+                alternateScreenWheelRemainder = 0
+            }
+            alternateScreenWheelRemainder += delta
+            let steps = min(Int(abs(alternateScreenWheelRemainder)), 6)
+            guard steps > 0 else { return }
+            alternateScreenWheelRemainder = alternateScreenWheelRemainder.truncatingRemainder(dividingBy: 1)
+            if allowMouseReporting && terminal.mouseMode != .off {
+                let hit = calculateMouseHit(with: event)
+                let row = max(0, min(terminal.rows - 1, hit.grid.row - terminal.displayBuffer.yDisp))
+                let button = delta > 0 ? 4 : 5
+                let flags = event.modifierFlags
+                let encoded = terminal.encodeButton(button: button, release: false,
+                                                    shift: flags.contains(.shift), meta: flags.contains(.option),
+                                                    control: flags.contains(.control))
+                for _ in 0..<steps {
+                    terminal.sendEvent(buttonFlags: encoded, x: hit.grid.col, y: row,
+                                       pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+                }
+            } else if delta > 0 {
+                pageUp()
+            } else {
+                pageDown()
+            }
+            return
+        }
+        alternateScreenWheelRemainder = 0
+        let velocity: Int
+        if event.hasPreciseScrollingDeltas {
+            let delta = event.scrollingDeltaY / max(cellDimension.height, 1)
+            if scrollbackWheelRemainder != 0 && (scrollbackWheelRemainder > 0) != (delta > 0) {
+                scrollbackWheelRemainder = 0
+            }
+            scrollbackWheelRemainder += delta
+            velocity = Int(abs(scrollbackWheelRemainder))
+            scrollbackWheelRemainder = scrollbackWheelRemainder.truncatingRemainder(dividingBy: 1)
+        } else {
+            scrollbackWheelRemainder = 0
+            velocity = calcScrollingVelocity(delta: Int(abs(event.scrollingDeltaY)))
+        }
+        guard velocity > 0 else { return }
+        if event.scrollingDeltaY > 0 {
             scrollUp (lines: velocity)
         } else {
             scrollDown(lines: velocity)

@@ -455,7 +455,10 @@ final class AppModel {
     private func makeSession(kind: AgentKind, executable: String, directory: URL, resume: Bool,
                              conversation: String? = nil, title: String? = nil, customTitle: String? = nil,
                              extra: [String] = []) -> TerminalSession {
-        var arguments: [String] = [], environment: [String: String] = [:]
+        // Codex's alternate-screen redraw leaves inverse-color CJK cells behind
+        // in SwiftTerm. Inline mode uses normal scrollback and avoids that path.
+        var arguments: [String] = kind == .codex ? ["--no-alt-screen"] : []
+        var environment: [String: String] = [:]
         if let helper = Bundle.main.executablePath {
             switch kind {
             case .claude:
@@ -469,9 +472,9 @@ final class AppModel {
                     .appendingPathComponent(".codex/config.toml"), encoding: .utf8)) ?? ""
                 switch AgentEvents.userCodexNotify(configText: config) {
                 case .absent:
-                    arguments = ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
+                    arguments += ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
                 case .command(let own):
-                    arguments = ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
+                    arguments += ["-c", AgentEvents.codexNotifyOverride(executable: helper)]
                     if let data = try? JSONSerialization.data(withJSONObject: own) {
                         environment[AgentEvents.codexChainVariable] = String(decoding: data, as: UTF8.self)
                     }

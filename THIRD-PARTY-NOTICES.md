@@ -9,6 +9,7 @@
 - The vendored package manifest is reduced to the macOS library target, excluding upstream tools and benchmark dependencies.
 - Metal shader source is copied as a resource, using upstream's runtime-compilation fallback when needed. This avoids requiring the optional Metal build toolchain. The macOS terminal defaults to the native CPU renderer.
 - Local source patch: `MacLocalTerminalView.clipboardCopy` is `open` rather than `public`, allowing NotchAgent to reject unsolicited OSC 52 clipboard writes. Manual copy/paste remains supported.
+- Backported [SwiftTerm PR #578](https://github.com/migueldeicaza/SwiftTerm/pull/578) to center full-width CJK glyphs in their cells and size the cursor to cover the full character.
 
 NotchAgent's notch UI and window behavior are independently implemented. SwiftTerm is the only third-party code included.
 

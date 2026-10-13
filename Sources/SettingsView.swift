@@ -114,6 +114,13 @@ struct SettingsView: View {
                 Text(L("터미널 내용·API 키는 저장하거나 별도 서버로 전송하지 않습니다. 실행한 CLI 자체의 네트워크·파일 접근은 해당 CLI의 정책을 따릅니다.", "Terminal content and API keys are never stored or sent anywhere. Network and file access by the CLIs you run follows their own policies."))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section(L("앱", "Application")) {
+                Button(role: .destructive) { NSApp.terminate(nil) } label: {
+                    Label(L("앱 종료", "Quit App"), systemImage: "power")
+                }
+                Text(L("앱을 종료하면 열려 있는 터미널과 에이전트 세션도 종료됩니다.", "Quitting the app also ends open terminal and agent sessions."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("NotchAgent \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · SwiftTerm (MIT)")
                 .font(.caption2).foregroundStyle(.secondary)
         }

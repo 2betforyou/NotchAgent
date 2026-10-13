@@ -83,6 +83,15 @@ struct ViewLineInfo {
     var boxDrawings: [BoxDrawingRenderItem]
 }
 
+/// Position a wide glyph inside its terminal-cell slot without changing the grid.
+struct GlyphSlotFit {
+    var dx: CGFloat = 0
+    var dy: CGFloat = 0
+    var scale: CGFloat = 1
+
+    static let identity = GlyphSlotFit()
+}
+
 extension TerminalView {
     typealias CellDimension = CGSize
     
@@ -221,6 +230,32 @@ extension TerminalView {
         let snappedWidth = ceil(cellWidth * scale) / scale
         let snappedHeight = ceil(cellHeight * scale) / scale
         return CellDimension(width: max(1, snappedWidth), height: max(min(snappedHeight, 8192), 1))
+    }
+
+    /// Adapted from SwiftTerm PR #578: center full-width glyphs rather than
+    /// leaving the unused part of their two-cell slot entirely on the right.
+    func glyphSlotFit(font: CTFont, glyph: CGGlyph, columnWidth: Int) -> GlyphSlotFit {
+        guard columnWidth >= 2, cellDimension != nil else { return .identity }
+        let slotWidth = CGFloat(columnWidth) * cellDimension.width
+        var glyph = glyph
+        var advance = CGSize.zero
+        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, &advance, 1)
+        guard advance.width > 0 else { return .identity }
+
+        var ink = CGRect.zero
+        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, &ink, 1)
+        var scale: CGFloat = 1
+        if ink.width > 0, ink.height > 0,
+           ink.width > slotWidth || ink.height > cellDimension.height {
+            scale = max(0.1, min(min(slotWidth / ink.width, cellDimension.height / ink.height), 1))
+        }
+        let dx = (slotWidth - advance.width * scale) / 2
+        var dy: CGFloat = 0
+        if scale < 1, ink.height > 0 {
+            let baseline = ceil(CTFontGetDescent(fontSet.normal) + CTFontGetLeading(fontSet.normal))
+            dy = (cellDimension.height / 2 - baseline) - (ink.origin.y + ink.height / 2) * scale
+        }
+        return GlyphSlotFit(dx: dx, dy: dy, scale: scale)
     }
     
     func mapColor (color: Attribute.Color, isFg: Bool, isBold: Bool, useBrightColors: Bool = true) -> TTColor
@@ -1405,7 +1440,34 @@ extension TerminalView {
                         context.setFillColor(cgColor)
                     }
 
-                    CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+                    var glyphPositions = positions
+                    var fits: [GlyphSlotFit]? = nil
+                    if prepared.segment.columnWidth >= 2 {
+                        var computed = [GlyphSlotFit](repeating: .identity, count: runGlyphsCount)
+                        var anyScaled = false
+                        for i in 0..<runGlyphsCount {
+                            let fit = glyphSlotFit(font: runFont as CTFont, glyph: runGlyphs[i],
+                                                   columnWidth: prepared.segment.columnWidth)
+                            computed[i] = fit
+                            glyphPositions[i].x += fit.dx
+                            glyphPositions[i].y += fit.dy
+                            if fit.scale != 1 { anyScaled = true }
+                        }
+                        if anyScaled { fits = computed }
+                    }
+                    if let fits {
+                        for i in 0..<runGlyphsCount {
+                            let scale = fits[i].scale
+                            let drawFont: CTFont = scale == 1 ? runFont as CTFont
+                                : CTFontCreateCopyWithAttributes(runFont as CTFont,
+                                                                 CTFontGetSize(runFont as CTFont) * scale, nil, nil)
+                            var glyph = runGlyphs[i]
+                            var position = glyphPositions[i]
+                            CTFontDrawGlyphs(drawFont, &glyph, &position, 1, context)
+                        }
+                    } else {
+                        CTFontDrawGlyphs(runFont, runGlyphs, &glyphPositions, glyphPositions.count, context)
+                    }
 
                     // Draw other attributes
                     drawRunAttributes(runAttributes, glyphPositions: positions, in: context)
@@ -1681,8 +1743,10 @@ extension TerminalView {
         let offset = (cellDimension.height * (CGFloat(buffer.y-(buffer.yDisp-buffer.yBase)+1)))
         let lineOrigin = CGPoint(x: 0, y: frame.height - offset)
         #endif
+        let charUnderCursor = buffer.lines[vy][buffer.x]
         caretView.frame.origin = CGPoint(x: lineOrigin.x + (cellDimension.width * doublePosition * CGFloat(buffer.x)), y: lineOrigin.y)
-        caretView.setText (ch: buffer.lines [vy][buffer.x])
+        caretView.frame.size.width = cellDimension.width * doublePosition * CGFloat(max(1, Int(charUnderCursor.width)))
+        caretView.setText(ch: charUnderCursor)
     }
     
     // Does not use a default argument and merge, because it is called back

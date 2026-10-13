@@ -13,7 +13,7 @@ _Rendered from the app's UI with sample data._
 ## Features
 
 - **A workspace attached to the notch**: Aligns to the real notch, uses the menu bar's height, and leaves only the camera area empty. On displays without a notch, it shows a virtual notch at the top center. Expanding and collapsing animate smoothly, like the Dynamic Island.
-- **Native terminal**: Built on [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). Supports 256 colors and true color, TUIs, 5,000 lines of scrollback, input method composition (e.g. Korean), `⌘`-click to open links, and `⌘F` search.
+- **Native terminal**: Built on [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). Supports 256 colors and true color, TUIs, 5,000 lines of scrollback, input method composition (e.g. Korean), `⌘`-click to open links, and `⌘F` search. Codex runs with `--no-alt-screen` so its output uses normal terminal scrollback and avoids alternate-screen CJK redraw artifacts.
 - **Agent launcher**: Start Terminal, Codex, Claude Code, or Gemini CLI in one click. Keeps up to 8 sessions at once, and sessions keep running when the notch is collapsed.
 - **Readable tabs**: Shows the task title each CLI reports. Double-click or right-click a tab to name it yourself; names are restored with the session.
 - **Drag and drop files and folders**: Drop a file or image into the terminal to insert its path. Drop a folder on the notch, the preview, or the top of the expanded view to add it as a work folder and switch to it.
@@ -45,7 +45,7 @@ _Rendered from the app's UI with sample data._
 
 ### From a release
 
-Download the latest DMG from [Releases](../../releases), move `NotchAgent.app` to your Applications folder, and open it.
+Download the latest DMG or ZIP from [Releases](../../releases), move `NotchAgent.app` to your Applications folder, and open it. Check the release notes to see whether that build is Apple notarized.
 
 The current builds aren't notarized by Apple yet, so macOS blocks the first launch. Open the app once, then go to System Settings → Privacy & Security and click **Open Anyway** next to NotchAgent. You only need to do this once.
 
@@ -58,12 +58,14 @@ git clone <this-repo>
 cd NotchAgents
 bash Scripts/build.sh      # Release build
 bash Scripts/test.sh       # Tests
-bash Scripts/package.sh    # App and ZIP in Dist/ (local ad-hoc signature)
+bash Scripts/package.sh    # Versioned ZIP and SHA-256 checksum in Dist/ (local ad-hoc signature)
 ```
 
 Or open `NotchAgent.xcodeproj`, choose the **NotchAgent** scheme → **My Mac**, and Run.
 
 The build cache lives in `/private/tmp/NotchAgent-build-<uid>` (change it with `NOTCHAGENT_BUILD_DIR`). This avoids iCloud-synced folders, whose file attributes can break code signing.
+
+To publish a release, see the [v0.1.1 release checklist](docs/releases/v0.1.1.md). `Scripts/release.sh` makes a signed and notarized DMG when a Developer ID certificate and notary profile are available; `Scripts/package.sh` makes an unnotarized ZIP without touching a running `Dist/NotchAgent.app`.
 
 ## Usage
 
@@ -74,6 +76,7 @@ The build cache lives in `/private/tmp/NotchAgent-build-<uid>` (change it with `
 | Quick ask | Click the input line in the preview, type, and press `↩` (`Esc` to cancel) |
 | New session | Agent buttons at the right of the tab bar (fold or unfold them with `›` / `+`) |
 | End a session | The tab's `×`, or `exit` in the shell |
+| Quit the app | Settings → **Application** → **Quit App**, or the menu bar icon → **Quit NotchAgent**. Open terminal and agent sessions end when the app quits |
 | Rename a tab | Double-click the tab, or right-click → **Rename…**. Leave it empty or choose **Use Terminal Title** to go back to the automatic title |
 | Pass a file or image | Drop it into the terminal. Its path is inserted; press `↩` yourself to submit |
 | Drop a folder | Drop it on the collapsed notch, the preview, or the top of the expanded view to add it and switch. Dropped inside the terminal, only the path is inserted |
