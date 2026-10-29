@@ -216,7 +216,7 @@ struct IslandView: View {
                     AgentLogo(kind: banner.kind, size: 17)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(banner.reason.message).font(.subheadline.weight(.semibold))
+                    Text(banner.reason.title).font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                     Text("\(banner.kind.name) · \(banner.folder)")
                         .font(.caption).foregroundStyle(Palette.muted).lineLimit(1)

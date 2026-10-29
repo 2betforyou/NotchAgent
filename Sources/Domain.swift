@@ -154,6 +154,8 @@ enum AttentionReason: String, Codable, Equatable {
         case .failed: L("오류로 종료됐어요", "exited with an error")
         }
     }
+    /// The message on its own, as a heading ("Finished"); `message` reads inside a sentence.
+    var title: String { message.prefix(1).uppercased() + message.dropFirst() }
 }
 
 /// A session's state as the closed notch shows it (a colored ring when several are shown).

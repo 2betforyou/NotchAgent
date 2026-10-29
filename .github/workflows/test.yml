@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Apple silicon runner: the app and its tests are arm64 only.
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select the newest installed Xcode
+        run: |
+          xcode="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
+          [ -n "$xcode" ] || xcode=/Applications/Xcode.app
+          echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
+          "$xcode/Contents/Developer/usr/bin/xcodebuild" -version
+
+      - name: Build and test
+        env:
+          NOTCHAGENT_BUILD_DIR: ${{ runner.temp }}/NotchAgent-build
+        run: bash Scripts/test.sh

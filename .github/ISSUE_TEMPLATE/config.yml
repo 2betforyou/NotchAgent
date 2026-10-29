@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Privacy or other questions
+    url: https://github.com/2betforyou/NotchAgent#help
+    about: For anything that shouldn't be public, use the email address in the README. 공개하기 어려운 문의는 README의 이메일로 보내 주세요.

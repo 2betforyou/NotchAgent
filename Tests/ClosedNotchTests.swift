@@ -134,4 +134,23 @@ final class ClosedNotchTests: XCTestCase {
         XCTAssertFalse(restored.notchShowsWorking)
         XCTAssertTrue(restored.notchShowsWorkCount)
     }
+    func testWorkingCountWidensTheWing() throws {
+        let suite = "NotchAgent.count." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(defaults: defaults)
+        model.usage.enabled = false; model.claudeUsage.enabled = false
+        let tabs = (0..<2).map { _ in TerminalSession(kind: .claude, directory: URL(fileURLWithPath: "/tmp"), executable: "/bin/zsh", fontSize: 13) }
+        tabs.forEach { $0.start(); $0.recordOutput(at: Date()); _ = $0.tick(now: Date(), visible: false) }
+        defer { TerminalSession.stopAll(tabs, grace: 0.2) }
+        model.sessions = tabs
+        XCTAssertEqual(model.closedWingWidth, ClosedNotchLayout.singleWing, "count off: status only")
+        model.notchShowsWorkCount = true
+        XCTAssertGreaterThan(model.closedWingWidth, ClosedNotchLayout.singleWing, "time and count need room")
+    }
+    func testAttentionTitleStartsWithACapital() {
+        AppLanguage.current = .english; defer { AppLanguage.current = .korean }
+        XCTAssertEqual(AttentionReason.finished.title, "Finished")
+        XCTAssertEqual(AttentionReason.finished.message, "finished", "kept lowercase for “Codex finished”")
+    }
 }

@@ -44,10 +44,10 @@ final class ReadmeImagesTests: XCTestCase {
     }
     /// The language being rendered; images go to `docs/images/<en|ko>/`.
     private var language = AppLanguage.english
-    private func makeModel() -> AppModel {
+    private func makeModel(repository: RepositoryStatusService? = nil) -> AppModel {
         let codex = UsageService(snapshot: quota(32, 58))
         codex.enabled = true
-        let model = AppModel(defaults: defaults, usage: codex)
+        let model = AppModel(defaults: defaults, usage: codex, repositoryStatus: repository)
         AppLanguage.current = language
         let now = Date().timeIntervalSince1970
         ClaudeStatusLine.record(["five_hour": ["used_percentage": 23, "resets_at": now + 9000],
@@ -137,6 +137,7 @@ final class ReadmeImagesTests: XCTestCase {
             try heroImage()
             try notchStatesImage()
             try terminalImage()
+            try homeImage()
         }
     }
 
@@ -153,7 +154,7 @@ final class ReadmeImagesTests: XCTestCase {
         model.recordActivity(.bell, for: tab, now: Date().addingTimeInterval(-40))
         model.phase = .preview
         let island = try render(IslandView(model: model), size: CGSize(width: model.panelWidth + 32, height: model.hostHeight + 32), settle: 1.2)
-        let size = CGSize(width: 1512, height: 416)
+        let size = CGSize(width: 1512, height: model.previewHeight + 40) // the view measured itself while rendering
         let image = canvas(size) {
             wallpaper(NSRect(origin: .zero, size: size))
             menuBar(width: size.width, top: size.height)
@@ -166,52 +167,53 @@ final class ReadmeImagesTests: XCTestCase {
     /// The closed notch in each state, each on its own strip of menu bar.
     private func notchStatesImage() throws {
         var rows: [(String, String, NSImage)] = []
-        func closed(_ label: String, _ note: String, _ setup: (AppModel) throws -> Void) throws {
+        func closed(_ label: String, _ note: String, height: CGFloat = 44, _ setup: (AppModel) throws -> Void) throws {
             let model = makeModel()
             try setup(model)
             model.phase = .closed
             // IslandView has a fixed, top-aligned frame; render it whole and keep the top strip.
             let full = try render(IslandView(model: model), size: CGSize(width: model.panelWidth + 32, height: model.hostHeight + 32))
-            let strip = NSImage(size: CGSize(width: full.size.width, height: 44), flipped: false) { rect in
-                full.draw(in: rect, from: NSRect(x: 0, y: full.size.height - 44, width: full.size.width, height: 44), operation: .copy, fraction: 1)
+            let strip = NSImage(size: CGSize(width: full.size.width, height: height), flipped: false) { rect in
+                full.draw(in: rect, from: NSRect(x: 0, y: full.size.height - height, width: full.size.width, height: height), operation: .copy, fraction: 1)
                 return true
             }
             rows.append((label, note, strip))
         }
-        try closed(L("대기", "Idle"), L("링: 주간 한도 · 숫자: 5시간 한도", "Ring: weekly limit · number: 5-hour limit")) { _ in }
-        try closed(L("작업 중", "Working"), L("경과 시간 (1분 전까지는 •••)", "Elapsed time (••• for the first minute)")) { m in
-            let s = try session(.claude, folder: folders[0], title: "task"); s.start()
-            for x in stride(from: 150.0, through: 0, by: -1.5) { s.recordOutput(at: Date().addingTimeInterval(-x)) }
-            _ = s.tick(now: Date(), visible: false); m.sessions = [s]
+        func working(_ kind: AgentKind, for seconds: TimeInterval) throws -> TerminalSession {
+            let s = try session(kind, folder: folders[0], title: "task"); s.start()
+            for x in stride(from: seconds, through: 0, by: -1.5) { s.recordOutput(at: Date().addingTimeInterval(-x)) }
+            _ = s.tick(now: Date(), visible: false)
+            return s
         }
-        try closed(L("완료", "Finished"), L("초록 ✓", "Green ✓")) { m in
-            let s = try session(.codex, folder: folders[0], title: "task"); s.start()
-            s.receive(.finished, conversation: nil, now: Date()); _ = s.tick(now: Date(), visible: false); m.sessions = [s]
+        try closed(L("대기", "Idle"), L("숫자: 5시간 사용률 · 링: 주간 사용률", "Number: 5-hour quota used · ring: weekly quota used")) { _ in }
+        try closed(L("작업 시작", "Working"), L("첫 1분은 •••", "••• for the first minute")) { m in
+            m.sessions = [try working(.claude, for: 6)]
         }
-        try closed(L("확인 요청", "Needs you"), L("호박 🔔", "Amber 🔔")) { m in
-            let s = try session(.claude, folder: folders[0], title: "task"); s.start()
-            s.terminal.onBell?(); _ = s.tick(now: Date(), visible: false); m.sessions = [s]
+        try closed(L("작업 중", "Still working"), L("1분이 지나면 경과 시간", "Elapsed time after a minute")) { m in
+            m.sessions = [try working(.claude, for: 150)]
         }
-        try closed(L("여러 세션", "Several sessions"), L("색 고리: 흰색 작업 중 · 초록 완료 · 호박 확인 요청 · 없음 조용함", "Rings: white working · green finished · amber needs you · none quiet")) { m in
-            let a = try session(.claude, folder: folders[0], title: "a"), b = try session(.codex, folder: folders[1], title: "b")
-            let c = try session(.claude, folder: folders[2], title: "c"), d = try session(.shell, folder: folders[0], title: "d")
-            [a, b, c, d].forEach { $0.start() }
-            a.recordOutput(at: Date()); _ = a.tick(now: Date(), visible: false)
-            b.receive(.finished, conversation: nil, now: Date()); _ = b.tick(now: Date(), visible: false)
-            c.terminal.onBell?(); _ = c.tick(now: Date(), visible: false)
-            m.sessions = [a, b, c, d]
+        try closed(L("여러 세션 작업 중", "Several working"), L("선택: 작업 중인 세션 수", "Optional: number of working sessions")) { m in
+            m.notchShowsWorkCount = true
+            m.sessions = [try working(.claude, for: 150), try working(.codex, for: 40)]
         }
-        let rowHeight: CGFloat = 64, width: CGFloat = 1512
-        let size = CGSize(width: width, height: rowHeight * CGFloat(rows.count) + 24)
+        try closed(L("완료 알림", "Completion notice"), L("약 6초 뒤 사라지고 최근 활동에 남음", "Fades after about 6 seconds; kept in Recent Activity"), height: 96) { m in
+            let s = try session(.codex, folder: folders[0], title: L("빌드 오류 수정", "Fix build error")); s.start()
+            m.sessions = [s]
+            m.banner = NotchBanner(sessionID: s.id, kind: .codex, reason: .finished, folder: "my-app", shownAt: Date())
+        }
+        let gap: CGFloat = 20, width: CGFloat = 1512
+        let heights = rows.map { max(64, $0.2.size.height + gap) }
+        let size = CGSize(width: width, height: heights.reduce(0, +) + 24)
         let image = canvas(size) {
             wallpaper(NSRect(origin: .zero, size: size))
+            var top = size.height - 12
             for (index, row) in rows.enumerated() {
-                let top = size.height - 12 - CGFloat(index) * rowHeight
                 NSColor(white: 0.08, alpha: 0.55).setFill()
                 NSRect(x: 0, y: top - 32, width: width, height: 32).fill()
                 row.2.draw(in: NSRect(x: (width - row.2.size.width) / 2, y: top - row.2.size.height, width: row.2.size.width, height: row.2.size.height))
                 (row.0 as NSString).draw(at: NSPoint(x: 24, y: top - 24), withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: NSColor.white])
                 (row.1 as NSString).draw(at: NSPoint(x: 24, y: top - 50), withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor(white: 1, alpha: 0.7)])
+                top -= heights[index]
             }
         }
         try save(image, "notch-states.png")
@@ -245,5 +247,46 @@ final class ReadmeImagesTests: XCTestCase {
             image.draw(in: NSRect(x: (size.width - image.size.width) / 2, y: size.height - image.size.height, width: image.size.width, height: image.size.height))
         }
         try save(framed, "workspace.png")
+    }
+
+    /// Project Home: activity heatmap and repository row. The repository is sample data, so no
+    /// git or gh command runs and nothing about real repositories appears.
+    private func homeImage() throws {
+        let path = Workspaces.normalize(folders[0])
+        var days: [String: Int] = [:]
+        let calendar = Calendar.current
+        for offset in 0..<84 {
+            let date = calendar.date(byAdding: .day, value: -offset, to: Date())!
+            let weekday = calendar.component(.weekday, from: date)
+            let base = (weekday == 1 || weekday == 7) ? 1 : 4
+            let count = (offset * 7 + offset / 3) % 9 < 3 ? 0 : base + (offset * 5) % 7
+            if count > 0 { days[ProjectActivity.dayKey(date, calendar: calendar)] = count }
+        }
+        defaults.set(try JSONEncoder().encode([path: days]), forKey: "projectActivityV1")
+        defaults.set(true, forKey: "repositoryGitHubEnabled")
+        let github = GitHubRepository(owner: "you", name: "my-app")
+        let sample = RepositorySnapshot(
+            // A root that doesn't exist keeps the sample size: measuring it fails instead of reading 0 KB.
+            root: path + "/.readme-sample", branch: "feature/login-validation", detached: false, changedFiles: 3, repository: github,
+            pullRequest: RepositoryPullRequest(number: 42, title: "Validate email on the login form",
+                                               url: URL(string: "https://github.com/you/my-app/pull/42")!,
+                                               draft: false, review: "APPROVED", checks: .passed),
+            sizeBytes: 184_000_000, sizeCalculatedAt: Date())
+        let repository = RepositoryStatusService(defaults: defaults, snapshot: sample, load: { _, _ in sample })
+        let model = makeModel(repository: repository)
+        let claude = try session(.claude, folder: folders[0], title: L("로그인 폼 검증", "Login form validation"))
+        let codex = try session(.codex, folder: folders[0], title: L("API 문서 정리", "Tidy API docs"))
+        claude.start(); codex.start()
+        model.sessions = [claude, codex]
+        model.selectHome()
+        model.phase = .terminal
+        let image = try render(IslandView(model: model), size: CGSize(width: model.panelWidth + 32, height: model.hostHeight + 32), settle: 1.5)
+        let size = CGSize(width: 1512, height: image.size.height + 20)
+        let framed = canvas(size) {
+            wallpaper(NSRect(origin: .zero, size: size))
+            menuBar(width: size.width, top: size.height)
+            image.draw(in: NSRect(x: (size.width - image.size.width) / 2, y: size.height - image.size.height, width: image.size.width, height: image.size.height))
+        }
+        try save(framed, "home.png")
     }
 }

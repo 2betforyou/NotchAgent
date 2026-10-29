@@ -8,7 +8,7 @@ Open your project, start an agent, and collapse the notch to get your screen bac
 
 ![NotchAgent preview with usage and recent activity](docs/images/en/hero.png)
 
-*Illustrative app UI with sample data. Screenshots may differ from the current layout.*
+*Illustrative app UI with sample data.*
 
 ## Get started
 
@@ -47,6 +47,8 @@ In **Settings → Notch → Collapsed notch**, choose the persistent displays:
 | Ongoing work | On |
 | Number of working sessions | Off |
 
+![Collapsed notch: usage while idle, working, elapsed time, working count, and a completion notice](docs/images/en/notch-states.png)
+
 Completion and input request notices disappear after about six seconds. Find them again in **Recent Activity**. Choose **Notch**, **Notification Center**, and **Sound** separately for each event in **Settings → Alerts → Event delivery**. Existing delivery choices are preserved; there is no separate notice master switch. Turning off notch displays doesn't stop your sessions.
 
 ### Projects and sessions
@@ -64,6 +66,10 @@ Projects are always visible in the preview and workspace. Add a folder, switch p
 *Illustrative app UI with sample data.*
 
 ### Repository status on Home
+
+![Project Home with the activity heatmap and repository status](docs/images/en/home.png)
+
+*Illustrative app UI with sample data.*
 
 Between the activity heatmap and launch cards, Git projects show the current branch and changed-file count. Click the count to inspect file names. GitHub projects also have a repository link and **Connect PR & checks**. This optional connection uses the installed GitHub CLI (`gh`) and its existing sign-in; you can disable it in Settings → Agents. It reads the branch's open PR, review/draft state, and checks. Without a PR, it can show the latest workflow run for the local HEAD commit. Failures remain distinct from “no PR.” Data refreshes every minute while Home is open or with the row's refresh button. Only github.com remotes on `origin` are supported; no repository writes or sign-in flow are performed. Non-Git folders hide the row. Home keeps its fixed window size and existing element sizes; the launch cards sit below the repository row.
 

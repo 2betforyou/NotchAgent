@@ -1,0 +1,74 @@
+name: Bug report
+description: Something doesn't work as expected. (버그 신고 · 한국어로 작성해도 됩니다)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please don't paste API keys, tokens, or private file contents.
+        신고해 주셔서 감사합니다. API 키, 토큰, 비공개 파일 내용은 붙여 넣지 마세요.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the workspace with ⌃⌥Space
+        2. Start a Claude Code session
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: view
+    attributes:
+      label: Where did it happen?
+      multiple: true
+      options:
+        - Collapsed notch
+        - Preview
+        - Workspace / terminal
+        - Home
+        - Settings
+        - Notifications
+        - Install or first launch
+        - Other
+  - type: input
+    id: app-version
+    attributes:
+      label: NotchAgent version
+      description: Settings → About
+      placeholder: "0.1.2"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: "macOS 27.1, MacBook Pro 14-inch (M3)"
+    validations:
+      required: true
+  - type: input
+    id: cli
+    attributes:
+      label: Agent CLI and version, if related
+      placeholder: "claude 2.x / codex 0.x / gemini 0.x"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Diagnostic log (optional)
+      description: |
+        Run the command below and paste the relevant lines. The log records error kinds, not terminal content, but review it before sharing.
+        아래 명령의 결과에서 관련 줄을 붙여 주세요. 공유 전에 내용을 확인하세요.
+        `log show --last 1h --info --predicate 'subsystem == "app.notchagent.desktop"'`
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or recording (optional)
+      description: Drag files here. Hide anything private first.

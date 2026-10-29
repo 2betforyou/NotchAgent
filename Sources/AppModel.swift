@@ -266,8 +266,10 @@ final class AppModel {
     /// Camera housing width (a virtual notch on displays without one).
     var notchGapWidth: CGFloat { compactWidth - 100 }
     /// With nothing to show, the wings vanish into the notch; an unread error keeps a small one.
+    /// Elapsed time plus a working-session count needs more room than the status alone.
     var closedWingWidth: CGFloat {
         let wing = closedLayout.wingWidth
+        if case .single = closedLayout, notchShowsWorkCount, workingNotchSessions.count > 1 { return max(wing, 64) }
         return wing == 0 && lastError != nil ? 32 : wing
     }
     var closedWidth: CGFloat {
