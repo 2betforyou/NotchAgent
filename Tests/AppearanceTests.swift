@@ -23,6 +23,11 @@ final class AppearanceTests: XCTestCase {
     func testEveryThemeHasSixteenColors() {
         for theme in TerminalTheme.allCases { XCTAssertEqual(theme.ansi.count, 16, theme.name) }
     }
+    func testDefaultTerminalBackgroundIsBlack() {
+        XCTAssertEqual(TerminalTheme.standard.background, 0x000000)
+        let s = TerminalSession(kind: .shell, directory: FileManager.default.temporaryDirectory, executable: "/bin/zsh", fontSize: 13)
+        XCTAssertEqual(s.terminal.nativeBackgroundColor, TerminalTheme.ns(0x000000))
+    }
     func testAccentIsRememberedAndDrivesPalette() {
         let d = UserDefaults.standard
         let saved = d.object(forKey: "accent")

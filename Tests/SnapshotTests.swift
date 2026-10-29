@@ -20,7 +20,15 @@ final class SnapshotTests: XCTestCase {
         let suite = "NotchAgent.snapshot." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(defaults: defaults, usage: sampleUsage)
+        let sampleRepository: @Sendable (String, Bool) -> RepositorySnapshot? = { path, _ in
+            RepositorySnapshot(root: path, branch: "main", detached: false, changedFiles: 3,
+                               repository: GitHubRepository(owner: "sample", name: "project"),
+                               pullRequest: RepositoryPullRequest(number: 24, title: "Improve project home", url: URL(string: "https://github.com/sample/project/pull/24")!, draft: false, review: "REVIEW_REQUIRED", checks: .passed))
+        }
+        let repository = RepositoryStatusService(defaults: defaults,
+            snapshot: sampleRepository(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop").path, true), load: sampleRepository)
+        repository.githubEnabled = true
+        let model = AppModel(defaults: defaults, usage: sampleUsage, repositoryStatus: repository)
         model.notchHeight = 38
         model.hasPhysicalNotch = true
         model.physicalNotchWidth = 185 // 14-inch MacBook Pro camera housing
@@ -77,8 +85,20 @@ final class SnapshotTests: XCTestCase {
             try XCTUnwrap(rep.representation(using: .png, properties: [:]))
                 .write(to: output.appendingPathComponent("\(phase).png"))
         }
+        model.selectHome()
+        model.phase = .terminal
+        model.panelWidth = 940; model.panelHeight = 620
+        let homeHost = NSHostingView(rootView: IslandView(model: model))
+        homeHost.frame = NSRect(x: 0, y: 0, width: model.panelWidth + 32, height: model.hostHeight + 32)
+        let homeWindow = NSWindow(contentRect: homeHost.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        homeWindow.contentView = homeHost
+        homeHost.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        let homeRep = try XCTUnwrap(homeHost.bitmapImageRepForCachingDisplay(in: homeHost.bounds))
+        homeHost.cacheDisplay(in: homeHost.bounds, to: homeRep)
+        try XCTUnwrap(homeRep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("home.png"))
         let settings = NSHostingView(rootView: SettingsView(model: model, displayChanged: {}))
-        settings.frame = NSRect(x: 0, y: 0, width: 590, height: 640)
+        settings.frame = NSRect(x: 0, y: 0, width: 760, height: 580)
         let settingsWindow = NSWindow(contentRect: settings.frame, styleMask: [.titled], backing: .buffered, defer: false)
         settingsWindow.contentView = settings
         settings.layoutSubtreeIfNeeded()

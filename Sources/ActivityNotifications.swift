@@ -14,6 +14,7 @@ enum ActivityNotificationText {
 @MainActor
 final class ActivityNotifications: NSObject, UNUserNotificationCenterDelegate {
     var openSession: ((UUID) -> Void)?
+    var openActivity: ((UUID) -> Void)?
     private let center = UNUserNotificationCenter.current()
     private var authorized = false
 
@@ -43,7 +44,7 @@ final class ActivityNotifications: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = ActivityNotificationText.title(for: activity)
         content.body = ActivityNotificationText.body(for: activity, showsDetails: showsDetails)
-        content.userInfo = ["sessionID": activity.sessionID.uuidString]
+        content.userInfo = ["sessionID": activity.sessionID.uuidString, "activityID": activity.id.uuidString]
         if sound { content.sound = .default }
         center.add(UNNotificationRequest(identifier: activity.id.uuidString, content: content, trigger: nil)) { error in
             if error != nil { Log.app.notice("activity notification could not be delivered") }
@@ -57,10 +58,13 @@ final class ActivityNotifications: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
-        if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-           let rawID = response.notification.request.content.userInfo["sessionID"] as? String,
-           let id = UUID(uuidString: rawID) {
-            Task { @MainActor [weak self] in self?.openSession?(id) }
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            let info = response.notification.request.content.userInfo
+            if let raw = info["activityID"] as? String, let id = UUID(uuidString: raw) {
+                Task { @MainActor [weak self] in self?.openActivity?(id) }
+            } else if let raw = info["sessionID"] as? String, let id = UUID(uuidString: raw) {
+                Task { @MainActor [weak self] in self?.openSession?(id) }
+            }
         }
         completionHandler()
     }

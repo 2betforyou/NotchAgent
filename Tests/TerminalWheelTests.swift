@@ -74,3 +74,24 @@ func preciseScrollbackWheelSpeed() throws {
     let linesMoved = bottom - view.getTerminal().buffer.yDisp
     #expect((1...3).contains(linesMoved))
 }
+
+@MainActor
+@Test("SGR mouse movement is not encoded as a button release")
+func sgrMouseMotionDoesNotClick() {
+    let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+    let capture = WheelCapture()
+    view.terminalDelegate = capture
+    view.feed(text: "\u{1b}[?1003h\u{1b}[?1006h")
+
+    view.getTerminal().sendMotion(buttonFlags: 3, x: 5, y: 2, pixelX: 0, pixelY: 0)
+    #expect(String(decoding: capture.sent, as: UTF8.self) == "\u{1b}[<35;6;3M")
+
+    capture.sent = []
+    view.getTerminal().sendEvent(buttonFlags: 3, x: 5, y: 2, pixelX: 0, pixelY: 0)
+    #expect(String(decoding: capture.sent, as: UTF8.self) == "\u{1b}[<0;6;3m")
+
+    view.feed(text: "\u{1b}[?1016h")
+    capture.sent = []
+    view.getTerminal().sendMotion(buttonFlags: 3, x: 5, y: 2, pixelX: 8, pixelY: 9)
+    #expect(String(decoding: capture.sent, as: UTF8.self) == "\u{1b}[<35;8;9M")
+}

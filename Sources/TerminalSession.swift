@@ -170,6 +170,7 @@ class AgentTerminalView: LocalProcessTerminalView {
 final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDelegate {
     let id = UUID()
     let kind: AgentKind
+    let isTemporary: Bool
     let initialDirectory: URL
     let startedAt = Date()
     private(set) var title: String
@@ -191,6 +192,8 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     @ObservationIgnored private var pendingFinished = false
     @ObservationIgnored private var pendingNeedsInput = false
     @ObservationIgnored private var lastFinishedAt: Date?
+    @ObservationIgnored private var lastFinishWasGuess = false
+    @ObservationIgnored private(set) var completedTurnCount = 0
     @ObservationIgnored private var rang = false
     @ObservationIgnored private var exitNoticed = false
     @ObservationIgnored let terminal: AgentTerminalView
@@ -203,7 +206,8 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
     static let scrollbackLines = 5_000
 
     init(kind: AgentKind, directory: URL, executable: String, fontSize: Double,
-         arguments: [String] = [], environment: [String: String] = [:], title: String? = nil, customTitle: String? = nil) {
+         arguments: [String] = [], environment: [String: String] = [:], title: String? = nil, customTitle: String? = nil, isTemporary: Bool = false) {
+        self.isTemporary = isTemporary
         self.kind = kind; self.initialDirectory = directory; self.directory = directory
         self.executable = executable; self.arguments = arguments; self.environment = environment
         self.title = SessionName.clean(title) ?? directory.lastPathComponent
@@ -212,7 +216,7 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         super.init()
         terminal.processDelegate = self
         terminal.registerForDraggedTypes(AgentTerminalView.fileDropTypes)
-        terminal.nativeBackgroundColor = NSColor(srgbRed: 0.035, green: 0.04, blue: 0.045, alpha: 1)
+        terminal.nativeBackgroundColor = TerminalTheme.ns(TerminalTheme.standard.background)
         terminal.nativeForegroundColor = NSColor(srgbRed: 0.88, green: 0.91, blue: 0.89, alpha: 1)
         terminal.caretColor = NSColor(srgbRed: 0.65, green: 0.96, blue: 0.72, alpha: 1)
         terminal.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
@@ -226,7 +230,7 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         guard !started else { return }
         started = true
         // Hooks and notify programs inherit this and report back which tab they belong to.
-        let env = ShellSafety.environment().merging(environment) { $1 }
+        let env = ShellSafety.terminalEnvironment().merging(environment) { $1 }
             .merging([AgentEvents.sessionVariable: id.uuidString]) { $1 }
             .map { "\($0.key)=\($0.value)" }
         let command = ([executable] + arguments).map(ShellSafety.quote).joined(separator: " ")
@@ -301,7 +305,7 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         case .finished:
             promptSubmittedAt = nil
             // The output-timing guess may already have announced this turn.
-            if let last = lastFinishedAt, now.timeIntervalSince(last) < 8 { break }
+            if lastFinishWasGuess, let last = lastFinishedAt, now.timeIntervalSince(last) < 8 { break }
             pendingFinished = true
         case .needsInput: pendingNeedsInput = true
         case nil: break
@@ -315,7 +319,11 @@ final class TerminalSession: NSObject, Identifiable, LocalProcessTerminalViewDel
         let guessedFinish = tracker.finishedWork(now: now)
         let finished = precise ? pendingFinished : guessedFinish
         pendingFinished = false
-        if finished { lastFinishedAt = now }
+        if finished {
+            lastFinishedAt = now
+            lastFinishWasGuess = !precise
+            completedTurnCount += 1
+        }
         let bell = rang || pendingNeedsInput; rang = false; pendingNeedsInput = false
         var reason: AttentionReason?
         if ended, started, !exitNoticed {

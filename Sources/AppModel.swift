@@ -4,6 +4,7 @@ import Observation
 @MainActor @Observable
 final class AppModel {
     var phase: IslandPhase = .closed
+    var showsInlineSettings = false
     var sessions: [TerminalSession] = []
     var selectedID: UUID?
     var lastError: String?
@@ -34,6 +35,10 @@ final class AppModel {
     var collapseOnDeactivate: Bool { didSet { defaults.set(collapseOnDeactivate, forKey: "collapseOnDeactivate") } }
     /// While every open session is quiet, the closed notch shows remaining usage instead of session icons.
     var quietNotchShowsUsage: Bool { didSet { defaults.set(quietNotchShowsUsage, forKey: "quietNotchShowsUsage") } }
+    var notchShowsWorking: Bool { didSet { defaults.set(notchShowsWorking, forKey: "notchShowsWorking") } }
+    var notchShowsWorkCount: Bool { didSet { defaults.set(notchShowsWorkCount, forKey: "notchShowsWorkCount") } }
+    var notchShowsCompletion: Bool { didSet { defaults.set(notchShowsCompletion, forKey: "notchShowsCompletion"); banner = nil } }
+    var notchShowsNeedsInput: Bool { didSet { defaults.set(notchShowsNeedsInput, forKey: "notchShowsNeedsInput"); banner = nil } }
     @ObservationIgnored var layoutChanged: (() -> Void)?
     var hotkey: Hotkey {
         didSet { if let data = try? JSONEncoder().encode(hotkey) { defaults.set(data, forKey: "hotkey") } }
@@ -44,6 +49,8 @@ final class AppModel {
     @ObservationIgnored var suspendHotkey: ((Bool) -> Void)?
     /// The preview's quick prompt has keyboard focus; the preview stays open meanwhile.
     var quickPromptActive = false
+    var quickChatIsTemporary = false
+    var showsTemporaryChats = false
     var quickAgent: AgentKind { didSet { defaults.set(quickAgent.rawValue, forKey: "quickAgent") } }
     @ObservationIgnored var beginQuickPrompt: (() -> Void)?
     /// The Terminal/Codex/Claude/Gemini buttons beside the tabs can be folded behind one button.
@@ -57,12 +64,29 @@ final class AppModel {
     var notifyForCompletion: Bool { didSet { defaults.set(notifyForCompletion, forKey: "notifyForCompletion") } }
     var notifyForNeedsInput: Bool { didSet { defaults.set(notifyForNeedsInput, forKey: "notifyForNeedsInput") } }
     var notifyForSessionEnd: Bool { didSet { defaults.set(notifyForSessionEnd, forKey: "notifyForSessionEnd") } }
+    var notificationRoutes: [String: Bool] {
+        didSet { defaults.set(notificationRoutes, forKey: "notificationRoutesV1"); banner = nil }
+    }
     var keepRecentActivities: Bool {
         didSet {
             defaults.set(keepRecentActivities, forKey: "keepRecentActivities")
             saveRecentActivities()
         }
     }
+    var projectActivityEnabled: Bool {
+        didSet {
+            defaults.set(projectActivityEnabled, forKey: "projectActivityEnabled")
+            if !projectActivityEnabled {
+                projectActivity = ProjectActivity()
+                defaults.removeObject(forKey: "projectActivityV1")
+                defaults.removeObject(forKey: "projectActivityImportedV1")
+                projectImportMessage = nil
+            }
+        }
+    }
+    private(set) var projectActivity: ProjectActivity
+    private(set) var projectImportRunning = false
+    private(set) var projectImportMessage: String?
     var notificationPermissionMessage: String?
     @ObservationIgnored var notificationSettingsChanged: ((Bool) -> Void)?
     @ObservationIgnored var activityOccurred: ((RecentActivity) -> Void)?
@@ -77,6 +101,7 @@ final class AppModel {
     var banner: NotchBanner?
     let usage: UsageService
     let claudeUsage = ClaudeUsageService()
+    let repositoryStatus: RepositoryStatusService
     @ObservationIgnored var showTerminal: (() -> Void)?
     @ObservationIgnored var collapse: (() -> Void)?
     @ObservationIgnored var showSettings: (() -> Void)?
@@ -84,9 +109,10 @@ final class AppModel {
     @ObservationIgnored var runAlert: ((NSAlert) -> NSApplication.ModalResponse)?
     @ObservationIgnored private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, usage: UsageService? = nil) {
+    init(defaults: UserDefaults = .standard, usage: UsageService? = nil, repositoryStatus: RepositoryStatusService? = nil) {
         self.defaults = defaults
         self.usage = usage ?? UsageService()
+        self.repositoryStatus = repositoryStatus ?? RepositoryStatusService(defaults: defaults)
         let d = defaults
         workspacePath = d.string(forKey: "workspace") ?? FileManager.default.homeDirectoryForCurrentUser.path
         hoverEnabled = d.object(forKey: "hoverEnabled") as? Bool ?? true
@@ -100,6 +126,10 @@ final class AppModel {
         terminalSize = d.string(forKey: "terminalSize").flatMap(TerminalSize.init(rawValue:)) ?? .standard
         collapseOnDeactivate = d.bool(forKey: "collapseOnDeactivate")
         quietNotchShowsUsage = d.object(forKey: "quietNotchShowsUsage") as? Bool ?? true
+        notchShowsWorking = d.object(forKey: "notchShowsWorking") as? Bool ?? true
+        notchShowsWorkCount = d.object(forKey: "notchShowsWorkCount") as? Bool ?? false
+        notchShowsCompletion = d.object(forKey: "notchShowsCompletion") as? Bool ?? true
+        notchShowsNeedsInput = d.object(forKey: "notchShowsNeedsInput") as? Bool ?? true
         notifyEnabled = d.object(forKey: "notifyEnabled") as? Bool ?? true
         systemNotificationsEnabled = d.bool(forKey: "systemNotificationsEnabled")
         activitySoundEnabled = d.bool(forKey: "activitySoundEnabled")
@@ -107,7 +137,12 @@ final class AppModel {
         notifyForCompletion = d.object(forKey: "notifyForCompletion") as? Bool ?? true
         notifyForNeedsInput = d.object(forKey: "notifyForNeedsInput") as? Bool ?? true
         notifyForSessionEnd = d.object(forKey: "notifyForSessionEnd") as? Bool ?? true
+        notificationRoutes = d.dictionary(forKey: "notificationRoutesV1") as? [String: Bool] ?? [:]
         keepRecentActivities = d.object(forKey: "keepRecentActivities") as? Bool ?? true
+        let recordsProjectActivity = d.object(forKey: "projectActivityEnabled") as? Bool ?? true
+        projectActivityEnabled = recordsProjectActivity
+        projectActivity = ProjectActivity(data: recordsProjectActivity ? d.data(forKey: "projectActivityV1") : nil,
+                                          importedData: recordsProjectActivity ? d.data(forKey: "projectActivityImportedV1") : nil)
         showsNewSessionButtons = d.object(forKey: "showsNewSessionButtons") as? Bool ?? true
         quickAgent = d.string(forKey: "quickAgent").flatMap(AgentKind.init(rawValue:)).flatMap { $0 == .shell ? nil : $0 } ?? .claude
         hotkey = d.data(forKey: "hotkey").flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) } ?? .default
@@ -149,6 +184,7 @@ final class AppModel {
         return true
     }
     func openPriorityOrTerminal() {
+        if showsInlineSettings, let showSettings { showSettings(); return }
         if !openPrioritySession() { showTerminal?() }
     }
     /// The most important unseen event among a folder's sessions.
@@ -167,11 +203,13 @@ final class AppModel {
     }
     /// Preview text for the *current* folder, so switching folders updates it.
     var previewHeadline: String {
+        if showsTemporaryChats { return L("프로젝트 밖에서, 가볍게.", "A little room for a quick thought.") }
         let here = runningCount(in: workspacePath)
         return here == 0 ? L("작업은 가까이. 화면은 여유롭게.", "Work close by. Screen kept clear.")
                          : L("\(here)개의 세션이 열려 있어요.", "\(sessionCount(here)) open.")
     }
     var previewSubtitle: String {
+        if showsTemporaryChats { return L("임시 채팅 · 앱 종료 후 복원되지 않아요", "Temporary chats · not restored after quitting") }
         if let session = selected, visibleSessions.contains(where: { $0.id == session.id }) {
             return session.kind.name + " · " + session.initialDirectory.lastPathComponent
         }
@@ -181,18 +219,49 @@ final class AppModel {
     }
     /// Sessions the closed notch shows, in tab order: running ones and ended ones not yet seen.
     var notchSessions: [TerminalSession] { sessions.filter { $0.isRunning || $0.attention != nil } }
-    /// Usage when nothing needs a look: no sessions, or (by default) only quiet ones. A session
-    /// that is working or needs attention always takes the notch.
+    var workingNotchSessions: [TerminalSession] { sessions.filter { $0.isRunning && $0.isWorking } }
+    /// Only ongoing work occupies the wings. Unseen results never displace usage indefinitely.
     var closedLayout: ClosedNotchLayout {
-        let shown = notchSessions
-        let quiet = shown.allSatisfy { !$0.isWorking && $0.attention == nil }
-        if quiet, shown.isEmpty || quietNotchShowsUsage, !idleUsages.isEmpty { return .usage(idleUsages) }
-        return ClosedNotchLayout.make(shown.map(\.id))
+        if notchShowsWorking, let first = workingNotchSessions.first { return .single(first.id) }
+        if quietNotchShowsUsage, !idleUsages.isEmpty { return .usage(idleUsages) }
+        return .idle
     }
-    /// Remaining quota per agent for the idle notch; only agents whose usage display is on.
+    var closedWorkStatus: NotchStatus {
+        guard notchShowsWorking, let since = workingNotchSessions.compactMap(\.workingSince).min() else { return .empty }
+        return .working(since: since)
+    }
+    func shouldShowNotchBanner(_ reason: AttentionReason) -> Bool {
+        self[delivery: reason, channel: .notch]
+    }
+    subscript(delivery reason: AttentionReason, channel channel: ActivityChannel) -> Bool {
+        get {
+            if let value = notificationRoutes[ActivityChannel.key(reason, channel)] { return value }
+            switch channel {
+            case .notch: return notifyEnabled && (reason == .bell ? notchShowsNeedsInput : notchShowsCompletion)
+            case .system: return systemNotificationsEnabled && shouldDeliverActivity(reason)
+            case .sound: return activitySoundEnabled && shouldDeliverActivity(reason)
+            }
+        }
+        set {
+            // Freeze effective legacy choices before enabling permission for one route.
+            var routes = notificationRoutes
+            for event in [AttentionReason.finished, .bell, .exited] {
+                for destination in ActivityChannel.allCases {
+                    routes[ActivityChannel.key(event, destination)] = self[delivery: event, channel: destination]
+                }
+            }
+            routes[ActivityChannel.key(reason, channel)] = newValue
+            notificationRoutes = routes
+            if channel == .system && newValue {
+                if systemNotificationsEnabled { notificationSettingsChanged?(true) }
+                else { systemNotificationsEnabled = true }
+            }
+        }
+    }
+    /// Claude then Codex, matching the preview and workspace usage displays.
     var idleUsages: [IdleUsage] {
-        [usage.enabled ? IdleUsage(agent: .codex, snapshot: usage.snapshot) : nil,
-         claudeUsage.enabled ? IdleUsage(agent: .claude, snapshot: claudeUsage.snapshot) : nil].compactMap { $0 }
+        [claudeUsage.enabled ? IdleUsage(agent: .claude, snapshot: claudeUsage.snapshot) : nil,
+         usage.enabled ? IdleUsage(agent: .codex, snapshot: usage.snapshot) : nil].compactMap { $0 }
     }
     /// Camera housing width (a virtual notch on displays without one).
     var notchGapWidth: CGFloat { compactWidth - 100 }
@@ -205,8 +274,8 @@ final class AppModel {
         let width = notchGapWidth + closedWingWidth * 2
         return banner == nil ? width : max(width, 400)
     }
-    var closedHeight: CGFloat { banner == nil ? notchHeight : notchHeight + 34 }
-    static let bannerDuration: TimeInterval = 4.5
+    var closedHeight: CGFloat { banner == nil ? notchHeight : notchHeight + 52 }
+    static let bannerDuration: TimeInterval = 6
     /// Called once a second: updates working state and raises notices for unseen sessions.
     func tickActivity(now: Date = Date(), terminalIsVisible: Bool = true) {
         let cutoff = Date().addingTimeInterval(-Self.activityRetention)
@@ -215,16 +284,41 @@ final class AppModel {
             saveRecentActivities()
         }
         for session in sessions {
-            let visible = terminalIsVisible && phase == .terminal && session.id == selectedID
+            let visible = terminalIsVisible && phase == .terminal && !showsInlineSettings && session.id == selectedID
             if visible { markActivitiesRead(for: session.id) }
-            guard let reason = session.tick(now: now, visible: visible) else { continue }
+            let previousCompletions = session.completedTurnCount
+            let reason = session.tick(now: now, visible: visible)
+            if session.completedTurnCount > previousCompletions, session.kind != .shell, !session.isTemporary, projectActivityEnabled {
+                projectActivity.record(in: Workspaces.normalize(session.initialDirectory.path), at: now)
+                defaults.set(projectActivity.data(), forKey: "projectActivityV1")
+            }
+            guard let reason else { continue }
             recordActivity(reason, for: session, now: now)
-            if notifyEnabled, phase == .closed {
+            if shouldShowNotchBanner(reason), phase == .closed {
                 banner = NotchBanner(sessionID: session.id, kind: session.kind, reason: reason,
                                      folder: session.initialDirectory.lastPathComponent, shownAt: now)
             }
         }
         if let banner, phase != .closed || now.timeIntervalSince(banner.shownAt) > Self.bannerDuration { self.banner = nil }
+    }
+    func importPastActivity() {
+        guard projectActivityEnabled, !projectImportRunning else { return }
+        let path = workspacePath
+        projectImportRunning = true
+        projectImportMessage = nil
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                ProjectHistoryImporter.scan(projectPath: path)
+            }.value
+            guard projectActivityEnabled else { projectImportRunning = false; return }
+            projectActivity.mergeHistoricalCounts(result.dailyCounts, in: path)
+            defaults.set(projectActivity.importedData(), forKey: "projectActivityImportedV1")
+            let folder = URL(fileURLWithPath: path).lastPathComponent
+            projectImportMessage = result.replies == 0
+                ? L("\(folder)에서 가져올 로컬 대화를 찾지 못했습니다.", "No local replies found for \(folder).")
+                : L("\(folder)에서 과거 응답 \(result.replies)회를 가져왔습니다.", "Imported \(result.replies) past replies for \(folder).")
+            projectImportRunning = false
+        }
     }
     func openBanner() {
         guard let banner, let session = sessions.first(where: { $0.id == banner.sessionID }) else { self.banner = nil; return }
@@ -232,12 +326,53 @@ final class AppModel {
         openSession(id: session.id)
     }
     func recordActivity(_ reason: AttentionReason, for session: TerminalSession, now: Date) {
-        let activity = RecentActivity(sessionID: session.id, kind: session.kind, title: session.displayTitle,
-                                      folder: session.initialDirectory.lastPathComponent, reason: reason, date: now)
+        var activity = RecentActivity(sessionID: session.id, kind: session.kind, title: session.displayTitle,
+                                      folder: session.isTemporary ? L("임시 채팅", "Temporary chat") : session.initialDirectory.lastPathComponent, reason: reason, date: now,
+                                      projectPath: session.isTemporary ? nil : session.initialDirectory.path,
+                                      conversationID: session.isTemporary ? nil : session.conversationID)
+        activity.isTemporary = session.isTemporary
         recentActivities.insert(activity, at: 0)
         if recentActivities.count > Self.activityLimit { recentActivities.removeLast(recentActivities.count - Self.activityLimit) }
         saveRecentActivities()
         activityOccurred?(activity)
+    }
+    func canResumeActivity(_ activity: RecentActivity) -> Bool {
+        (activity.kind == .codex || activity.kind == .claude)
+            && activity.projectPath != nil && activity.conversationID?.isEmpty == false
+    }
+    func openActivity(id: UUID) {
+        guard let activity = recentActivities.first(where: { $0.id == id }) else {
+            lastError = L("이 활동 기록은 만료됐거나 삭제됐습니다.", "This activity has expired or was deleted.")
+            showTerminal?(); return
+        }
+        if let existing = sessions.first(where: {
+            !$0.ended && ($0.id == activity.sessionID || (canResumeActivity(activity)
+                && $0.kind == activity.kind && $0.conversationID == activity.conversationID
+                && $0.initialDirectory.path == activity.projectPath))
+        }) {
+            openSession(id: existing.id); markActivityRead(id: id); return
+        }
+        guard canResumeActivity(activity), let path = activity.projectPath else {
+            lastError = L("이 기록에는 대화 복원 정보가 없습니다. 프로젝트에서 CLI의 대화 목록을 확인하세요.", "This event has no conversation restore details. Open the CLI's conversation list in your project.")
+            showTerminal?(); return
+        }
+        guard SavedWorkspace(path: path).exists else {
+            lastError = L("프로젝트 폴더를 찾을 수 없습니다: \(path)", "Project folder not found: \(path)")
+            showTerminal?(); return
+        }
+        guard sessions.count < 8, let executable = executable(for: activity.kind) else {
+            lastError = sessions.count >= 8
+                ? L("최대 8개 세션을 열 수 있습니다. 탭을 닫고 다시 시도하세요.", "Up to 8 sessions can be open. Close a tab and try again.")
+                : L("CLI를 찾을 수 없습니다. 설정 → 에이전트에서 경로를 확인하세요.", "CLI not found. Check its path in Settings → Agents.")
+            showTerminal?(); return
+        }
+        let session = makeSession(kind: activity.kind, executable: executable, directory: URL(fileURLWithPath: path),
+                                  resume: true, conversation: activity.conversationID, title: activity.title)
+        sessions.append(session)
+        openSession(id: session.id)
+        markActivityRead(id: id)
+        lastError = nil
+        saveSessions()
     }
     func markActivitiesRead(for sessionID: UUID) {
         var changed = false
@@ -259,7 +394,7 @@ final class AppModel {
     private func saveRecentActivities() {
         guard keepRecentActivities else { defaults.removeObject(forKey: "recentActivities"); return }
         let cutoff = Date().addingTimeInterval(-Self.activityRetention)
-        let retained = recentActivities.filter { $0.date >= cutoff }
+        let retained = recentActivities.filter { $0.date >= cutoff && $0.isTemporary != true }
         if retained.isEmpty { defaults.removeObject(forKey: "recentActivities") }
         else if let data = try? JSONEncoder().encode(retained) { defaults.set(data, forKey: "recentActivities") }
     }
@@ -276,21 +411,34 @@ final class AppModel {
             showTerminal?()
             return
         }
-        activateWorkspace(Workspaces.normalize(session.initialDirectory.path))
+        if session.isTemporary { showsTemporaryChats = true }
+        else { activateWorkspace(Workspaces.normalize(session.initialDirectory.path)) }
         select(session)
     }
     var selected: TerminalSession? { sessions.first { $0.id == selectedID } }
     var runningCount: Int { sessions.filter(\.isRunning).count }
-    var workspaceName: String { URL(fileURLWithPath: workspacePath).lastPathComponent }
+    var workspaceName: String { showsTemporaryChats ? L("임시 채팅", "Temporary chats") : URL(fileURLWithPath: workspacePath).lastPathComponent }
     func executable(for kind: AgentKind) -> String? {
         ShellSafety.executable(kind.rawValue, override: defaults.string(forKey: kind.rawValue + "Path") ?? "")
     }
     /// Sessions of the active work folder; the others keep running in the background.
-    var visibleSessions: [TerminalSession] { sessions.filter { Workspaces.normalize($0.initialDirectory.path) == workspacePath } }
+    var visibleSessions: [TerminalSession] {
+        sessions.filter { showsTemporaryChats ? $0.isTemporary : !$0.isTemporary && Workspaces.normalize($0.initialDirectory.path) == workspacePath }
+    }
+    func selectTemporaryChats() {
+        if !showsTemporaryChats, let selectedID { lastSelection[workspacePath] = selectedID }
+        showsTemporaryChats = true
+        selectedID = sessions.last(where: { $0.isTemporary })?.id
+    }
     func runningCount(in path: String) -> Int {
         sessions.filter { $0.isRunning && Workspaces.normalize($0.initialDirectory.path) == path }.count
     }
     @ObservationIgnored private var lastSelection: [String: UUID] = [:]
+    @ObservationIgnored private var homeSelection: Set<String> = []
+    func selectHome() {
+        selectedID = nil
+        if !showsTemporaryChats { homeSelection.insert(workspacePath) }
+    }
     @discardableResult func addDroppedFolders(_ urls: [URL]) -> Bool {
         let folders = urls.filter { url in
             guard url.isFileURL else { return false }
@@ -328,10 +476,15 @@ final class AppModel {
         if let last = panel.urls.last { activateWorkspace(Workspaces.normalize(last.path)) }
     }
     func activateWorkspace(_ path: String) {
-        if let current = selectedID { lastSelection[workspacePath] = current }
+        if !showsTemporaryChats {
+            if let current = selectedID { lastSelection[workspacePath] = current }
+            else { homeSelection.insert(workspacePath) }
+        }
+        showsTemporaryChats = false
         workspacePath = path; defaults.set(path, forKey: "workspace")
         let visible = visibleSessions
-        selectedID = lastSelection[path].flatMap { id in visible.first { $0.id == id }?.id } ?? visible.last?.id
+        selectedID = homeSelection.contains(path) ? nil
+            : (lastSelection[path].flatMap { id in visible.first { $0.id == id }?.id } ?? visible.last?.id)
     }
     func removeWorkspace(_ path: String) {
         let running = sessions.filter { $0.isRunning && Workspaces.normalize($0.initialDirectory.path) == path }.count
@@ -427,7 +580,7 @@ final class AppModel {
         if let data = try? JSONEncoder().encode(workspaces) { defaults.set(data, forKey: "workspaces") }
     }
     @discardableResult func submitQuickPrompt(_ prompt: String) -> Bool {
-        guard launch(quickAgent, prompt: prompt) else { return false }
+        guard launch(quickAgent, prompt: prompt, temporary: quickChatIsTemporary) else { return false }
         quickPromptActive = false
         return true
     }
@@ -435,25 +588,36 @@ final class AppModel {
         quickPromptActive = false
         collapse?()
     }
-    @discardableResult func launch(_ kind: AgentKind, prompt: String? = nil) -> Bool {
+    @discardableResult func launch(_ kind: AgentKind, prompt: String? = nil, temporary: Bool? = nil) -> Bool {
         guard sessions.count < 8 else { lastError = L("최대 8개 세션을 열 수 있습니다. 사용하지 않는 세션을 닫아주세요.", "Up to 8 sessions can be open. Close one you no longer need."); return false }
         guard let executable = executable(for: kind) else {
             lastError = L("\(kind.name) 실행 파일을 찾을 수 없습니다. 설정에서 경로를 지정하세요.", "\(kind.name) was not found. Set its path in Settings.")
             return false
         }
+        let isTemporary = temporary ?? showsTemporaryChats
+        let directory: URL
+        if isTemporary {
+            do { directory = try TemporaryChat.createDirectory() }
+            catch { lastError = L("임시 채팅 폴더를 만들지 못했습니다.", "Could not create a temporary chat folder."); return false }
+        } else { directory = URL(fileURLWithPath: workspacePath) }
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             lastError = L("작업 폴더가 없습니다. 다른 폴더를 선택하세요.", "The work folder no longer exists. Choose another folder."); return false
         }
-        let session = makeSession(kind: kind, executable: executable, directory: URL(fileURLWithPath: workspacePath), resume: false,
+        let session = makeSession(kind: kind, executable: executable, directory: directory, resume: false,
+                                  isTemporary: isTemporary,
                                   extra: prompt.map { SessionRestore.initialPromptArguments(for: kind, prompt: $0) } ?? [])
-        sessions.append(session); selectedID = session.id; lastError = nil
+        showsTemporaryChats = isTemporary
+        sessions.append(session); selectedID = session.id
+        if !isTemporary { homeSelection.remove(workspacePath) }
+        lastError = nil
         saveSessions()
         showTerminal?()
         return true
     }
     private func makeSession(kind: AgentKind, executable: String, directory: URL, resume: Bool,
                              conversation: String? = nil, title: String? = nil, customTitle: String? = nil,
+                             isTemporary: Bool = false,
                              extra: [String] = []) -> TerminalSession {
         // Codex's alternate-screen redraw leaves inverse-color CJK cells behind
         // in SwiftTerm. Inline mode uses normal scrollback and avoids that path.
@@ -488,7 +652,8 @@ final class AppModel {
         if resume { arguments += SessionRestore.resumeArguments(for: kind, conversation: conversation) }
         arguments += extra
         let session = TerminalSession(kind: kind, directory: directory, executable: executable, fontSize: fontSize,
-                                      arguments: arguments, environment: environment, title: title, customTitle: customTitle)
+                                      arguments: arguments, environment: environment,
+                                      title: title ?? (isTemporary ? L("임시 채팅", "Temporary chat") : nil), customTitle: customTitle, isTemporary: isTemporary)
         session.conversationID = conversation
         session.terminal.onDropError = { [weak self] message in self?.lastError = message }
         session.apply(appearance)
@@ -497,7 +662,7 @@ final class AppModel {
     /// Remembers open sessions (not ones the user already ended) for the next launch.
     func saveSessions() {
         guard restoreSessions else { defaults.removeObject(forKey: "savedSessions"); return }
-        let open = sessions.filter { !$0.ended }.map {
+        let open = sessions.filter { !$0.ended && !$0.isTemporary }.map {
             SavedSession(kind: $0.kind, path: $0.initialDirectory.path, conversation: $0.conversationID,
                          title: $0.title, customTitle: $0.customTitle)
         }
@@ -523,20 +688,21 @@ final class AppModel {
         session.receive(AgentEvent(rawValue: event), conversation: conversation.isEmpty ? nil : conversation, now: now)
         if session.conversationID != before { saveSessions() }
     }
-    /// ⌘1–⌘8 pick a tab, ⇧⌘] / ⇧⌘[ step through tabs, ⌘T opens another session of the same kind.
+    /// ⌘1 picks Home, ⌘2–⌘9 pick sessions; ⇧⌘] / ⇧⌘[ cycle all tabs.
     /// Returns false for keys it does not handle, so they reach the terminal.
     func handleTabShortcut(key: String, shift: Bool) -> Bool {
         if shift, key == "a" { return openPrioritySession() }
         let tabs = visibleSessions
-        if !shift, let number = Int(key), (1...8).contains(number) {
-            guard number <= tabs.count else { return true }
-            selectedID = tabs[number - 1].id; return true
+        if !shift, let number = Int(key), (1...9).contains(number) {
+            if number == 1 { selectHome(); return true }
+            guard number - 1 <= tabs.count else { return true }
+            select(tabs[number - 2]); return true
         }
         if shift, key == "]" || key == "[" || key == "}" || key == "{" {
-            guard !tabs.isEmpty else { return true }
-            let current = tabs.firstIndex { $0.id == selectedID } ?? 0
+            let current = tabs.firstIndex { $0.id == selectedID }.map { $0 + 1 } ?? 0
             let step = key == "]" || key == "}" ? 1 : -1
-            selectedID = tabs[(current + step + tabs.count) % tabs.count].id
+            let next = (current + step + tabs.count + 1) % (tabs.count + 1)
+            if next == 0 { selectHome() } else { select(tabs[next - 1]) }
             return true
         }
         if !shift, key == "t" {
@@ -545,7 +711,9 @@ final class AppModel {
         return false
     }
     func select(_ session: TerminalSession) {
+        showsTemporaryChats = session.isTemporary
         selectedID = session.id
+        if !session.isTemporary { homeSelection.remove(workspacePath) }
         session.clearAttention()
         markActivitiesRead(for: session.id)
         showTerminal?()

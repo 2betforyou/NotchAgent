@@ -43,7 +43,7 @@ enum TerminalTheme: String, CaseIterable, Identifiable {
         case .warmInk: L("따뜻한 먹색", "Warm Ink")
         }
     }
-    var background: UInt32 { [0x090A0B, 0x0B1020, 0x14110E][index] }
+    var background: UInt32 { [0x000000, 0x0B1020, 0x14110E][index] }
     var foreground: UInt32 { [0xE0E8E3, 0xD6E2FF, 0xEDE3D4][index] }
     /// black, red, green, yellow, blue, magenta, cyan, white, then the bright variants.
     var ansi: [UInt32] {

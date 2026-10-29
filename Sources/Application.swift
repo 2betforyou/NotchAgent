@@ -21,7 +21,7 @@ enum NotchAgentApp {
 
 final class IslandPanel: NSPanel {
     var acceptsKeyboard = false
-    /// Tab and attention shortcuts (⌘1–8, ⇧⌘[ ], ⌘T, ⇧⌘A) handled before the terminal sees the key.
+    /// Home, tab and attention shortcuts (⌘1–9, ⇧⌘[ ], ⌘T, ⇧⌘A) handled before the terminal sees the key.
     var onTabShortcut: ((String, Bool) -> Bool)?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
@@ -62,7 +62,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverStart: Date?
     private var leaveStart: Date?
     private var previousApp: NSRunningApplication?
-    private var settingsWindow: NSWindow?
     private var welcomeWindow: NSWindow?
     private var hotKey: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
@@ -93,7 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.contentView = NSHostingView(rootView: IslandView(model: model))
         panel.setAccessibilityLabel("NotchAgent")
-        model.showTerminal = { [weak self] in self?.expand() }
+        model.showTerminal = { [weak self] in
+            self?.model.showsInlineSettings = false
+            self?.expand()
+        }
         model.collapse = { [weak self] in self?.collapse() }
         model.showSettings = { [weak self] in self?.showSettings() }
         model.runAlert = { [weak self] alert in self?.runAlert(alert) ?? alert.runModal() }
@@ -102,11 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let notifications = ActivityNotifications()
         activityNotifications = notifications
         notifications.openSession = { [weak self] id in self?.model.openSession(id: id) }
+        notifications.openActivity = { [weak self] id in self?.model.openActivity(id: id) }
         model.activityOccurred = { [weak self] activity in
             guard let self else { return }
-            guard self.model.shouldDeliverActivity(activity.reason) else { return }
-            self.activityNotifications?.deliver(activity, notification: self.model.systemNotificationsEnabled,
-                                                 sound: self.model.activitySoundEnabled,
+            self.activityNotifications?.deliver(activity, notification: self.model[delivery: activity.reason, channel: .system],
+                                                 sound: self.model[delivery: activity.reason, channel: .sound],
                                                  showsDetails: self.model.showNotificationDetails)
         }
         model.notificationSettingsChanged = { [weak self] enabled in
@@ -121,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if model.systemNotificationsEnabled { model.notificationPermissionMessage = message }
         }
         panel.onTabShortcut = { [weak self] key, shift in
-            guard let self, self.model.phase == .terminal else { return false }
+            guard let self, self.model.phase == .terminal, !self.model.showsInlineSettings else { return false }
             return self.model.handleTabShortcut(key: key, shift: shift)
         }
         DistributedNotificationCenter.default().addObserver(forName: AgentEvents.notification, object: nil, queue: .main) { [weak self] note in
@@ -150,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.menuTracking = false; self?.leaveStart = nil }
         }
         // Displays can come back in a different arrangement after sleep.
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(workspaceAppActivated),
+                                                          name: NSWorkspace.didActivateApplicationNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysChanged), name: NSWorkspace.didWakeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysChanged), name: NSWorkspace.screensDidWakeNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(screenLocked), name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
@@ -250,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.phase = .terminal
         panel.acceptsKeyboard = true; panel.ignoresMouseEvents = false
         NSApp.activate(); panel.makeKeyAndOrderFront(nil)
-        if let terminal = model.selected?.terminal { panel.makeFirstResponder(terminal) }
+        if !model.showsInlineSettings, let terminal = model.selected?.terminal { panel.makeFirstResponder(terminal) }
     }
     @objc func collapse() { collapse(restoringFocus: true) }
     private func collapse(restoringFocus: Bool) {
@@ -261,6 +267,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if restoringFocus, hadFocus, let previousApp, previousApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApp.activate(options: [])
         }
+    }
+    @objc private func workspaceAppActivated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        previousApp = app
     }
     func applicationDidResignActive(_ notification: Notification) {
         guard panel != nil, model.collapseOnDeactivate, model.phase == .terminal else { return }
@@ -279,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let response = Self.runAlert(alert, below: panel)
         if model.phase == .terminal {
             panel.makeKeyAndOrderFront(nil)
-            if let terminal = model.selected?.terminal { panel.makeFirstResponder(terminal) }
+            if !model.showsInlineSettings, let terminal = model.selected?.terminal { panel.makeFirstResponder(terminal) }
         }
         return response
     }
@@ -300,7 +311,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenus()
         model.languageChanged = { [weak self] in
             self?.buildMenus()
-            self?.settingsWindow?.title = L("NotchAgent 설정", "NotchAgent Settings")
         }
     }
     /// Status item menu and the main menu (edit commands for the terminal); rebuilt on language change.
@@ -366,14 +376,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
     @objc func showSettings() {
-        collapse()
-        if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 590, height: 580), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-            window.title = L("NotchAgent 설정", "NotchAgent Settings"); window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(model: model, displayChanged: { [weak self] in self?.positionPanel() }))
-            window.center(); settingsWindow = window
-        }
-        NSApp.activate(); settingsWindow?.makeKeyAndOrderFront(nil)
+        model.showsInlineSettings = true
+        model.quickPromptActive = false
+        expand()
+        panel.makeFirstResponder(nil)
     }
     private func showWelcome() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 530), styleMask: [.titled, .closable], backing: .buffered, defer: false)

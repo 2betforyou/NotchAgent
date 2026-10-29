@@ -62,8 +62,8 @@ final class ClosedNotchTests: XCTestCase {
     }
     func testIdleUsageRingIsWeeklyAndNumberIsFiveHour() throws {
         let usage = try XCTUnwrap(IdleUsage(agent: .claude, snapshot: snapshot([24, 85])))
-        XCTAssertEqual(usage.session.remaining, 76, "the number: 5-hour limit")
-        XCTAssertEqual(usage.weekly.remaining, 15, "the ring: weekly limit")
+        XCTAssertEqual(usage.session.consumed, 24, "the number: 5-hour quota used")
+        XCTAssertEqual(usage.weekly.consumed, 85, "the ring: weekly quota used")
         let reversed = UsageSnapshot(windows: snapshot([24, 85]).windows.reversed(), fetchedAt: Date())
         XCTAssertEqual(IdleUsage(agent: .claude, snapshot: reversed), usage, "picked by length, not order")
         let single = try XCTUnwrap(IdleUsage(agent: .codex, snapshot: snapshot([40])))
@@ -83,7 +83,7 @@ final class ClosedNotchTests: XCTestCase {
         let session = TerminalSession(kind: .claude, directory: URL(fileURLWithPath: "/tmp"), executable: "/bin/zsh", fontSize: 13)
         session.start(); defer { session.stop() }
         model.sessions = [session]
-        XCTAssertEqual(model.closedLayout, .single(session.id), "a session takes over the notch")
+        XCTAssertEqual(model.closedLayout, .idle, "a quiet session does not occupy the notch without usage")
     }
     func testQuietSessionsKeepShowingUsage() throws {
         let suite = "NotchAgent.quiet." + UUID().uuidString
@@ -97,9 +97,41 @@ final class ClosedNotchTests: XCTestCase {
         model.sessions = tabs
         guard case .usage = model.closedLayout else { return XCTFail("quiet sessions: usage stays by default") }
         model.quietNotchShowsUsage = false
-        XCTAssertEqual(model.closedLayout, .multi(left: [tabs[0].id], right: [tabs[1].id]), "setting off: session icons")
+        XCTAssertEqual(model.closedLayout, .idle, "usage off: quiet sessions leave the notch empty")
         model.quietNotchShowsUsage = true
         tabs[1].terminal.onBell?(); _ = tabs[1].tick(now: Date(), visible: false)
-        XCTAssertEqual(model.closedLayout, .multi(left: [tabs[0].id], right: [tabs[1].id]), "a session needing you takes the notch")
+        guard case .usage = model.closedLayout else { return XCTFail("unseen input requests must not displace usage") }
+        let now = Date()
+        tabs[0].recordOutput(at: now)
+        _ = tabs[0].tick(now: now, visible: false)
+        XCTAssertEqual(model.closedLayout, .single(tabs[0].id), "only working sessions occupy the wings")
+        XCTAssertEqual(model.closedWorkStatus, .working(since: now))
+        model.notchShowsWorking = false
+        guard case .usage = model.closedLayout else { return XCTFail("working display off: usage remains visible") }
+        model.notchShowsWorking = true
+        _ = tabs[0].tick(now: now.addingTimeInterval(3), visible: false)
+        guard case .usage = model.closedLayout else { return XCTFail("work stopped: return to usage") }
+    }
+    func testCollapsedNoticePreferencesPersistAndFilterEvents() throws {
+        let suite = "NotchAgent.notch." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(defaults: defaults)
+        XCTAssertTrue(model.notchShowsWorking)
+        XCTAssertFalse(model.notchShowsWorkCount)
+        XCTAssertTrue(model.shouldShowNotchBanner(.finished))
+        XCTAssertTrue(model.shouldShowNotchBanner(.bell))
+        model.notchShowsCompletion = false
+        XCTAssertFalse(model.shouldShowNotchBanner(.finished))
+        XCTAssertFalse(model.shouldShowNotchBanner(.failed))
+        XCTAssertTrue(model.shouldShowNotchBanner(.bell))
+        model.notchShowsNeedsInput = false
+        model.notchShowsWorking = false
+        model.notchShowsWorkCount = true
+        let restored = AppModel(defaults: defaults)
+        XCTAssertFalse(restored.shouldShowNotchBanner(.bell))
+        XCTAssertFalse(restored.notchShowsCompletion)
+        XCTAssertFalse(restored.notchShowsWorking)
+        XCTAssertTrue(restored.notchShowsWorkCount)
     }
 }

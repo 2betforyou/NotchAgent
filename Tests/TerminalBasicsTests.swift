@@ -14,10 +14,14 @@ final class TerminalBasicsTests: XCTestCase {
     }
     func testNumberKeysPickTabs() {
         let (model, s) = model(tabs: 3)
-        XCTAssertTrue(model.handleTabShortcut(key: "3", shift: false))
+        XCTAssertTrue(model.handleTabShortcut(key: "4", shift: false))
         XCTAssertEqual(model.selectedID, s[2].id)
+        XCTAssertTrue(model.handleTabShortcut(key: "1", shift: false))
+        XCTAssertNil(model.selectedID, "⌘1 picks the pinned project home")
+        XCTAssertTrue(model.handleTabShortcut(key: "2", shift: false))
+        XCTAssertEqual(model.selectedID, s[0].id)
         XCTAssertTrue(model.handleTabShortcut(key: "7", shift: false), "consumed even without a 7th tab")
-        XCTAssertEqual(model.selectedID, s[2].id)
+        XCTAssertEqual(model.selectedID, s[0].id)
     }
     func testBracketsCycleTabs() {
         let (model, s) = model(tabs: 3)
@@ -25,7 +29,7 @@ final class TerminalBasicsTests: XCTestCase {
         XCTAssertEqual(model.selectedID, s[1].id)
         XCTAssertTrue(model.handleTabShortcut(key: "[", shift: true))
         XCTAssertTrue(model.handleTabShortcut(key: "[", shift: true))
-        XCTAssertEqual(model.selectedID, s[2].id, "wraps around")
+        XCTAssertNil(model.selectedID, "wraps through Home")
     }
     func testOtherKeysReachTheTerminal() {
         let (model, _) = model(tabs: 2)

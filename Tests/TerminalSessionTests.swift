@@ -253,7 +253,9 @@ final class TerminalSessionTests: XCTestCase {
     // MARK: Close confirmation only when work would be interrupted
 
     func testIdleShellClosesWithoutAskingButRunningCommandAsks() throws {
-        let shell = TerminalSession(kind: .shell, directory: directory, executable: "/bin/zsh", fontSize: 13)
+        // Keep personal zsh plugins/startup output from racing the test's prompt detection.
+        let shell = TerminalSession(kind: .shell, directory: directory, executable: "/bin/zsh", fontSize: 13,
+                                    environment: ["ZDOTDIR": directory.path])
         sessions.append(shell)
         shell.start()
         let model = AppModel()

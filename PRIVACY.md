@@ -20,18 +20,23 @@ macOS 환경설정(`~/Library/Preferences/app.notchagent.desktop.plist`)에 다�
 - 사용자가 직접 입력한 CLI 실행 파일 경로
 - 사용량 표시 사용 여부, 첫 실행 안내 완료 여부
 - 세션 복원을 켠 경우: 열려 있던 탭의 종류(Terminal·Codex·Claude Code·Gemini CLI), 폴더, 순서, 터미널이 보고한 작업 제목과 사용자가 정한 탭 이름, 그리고 대화를 정확히 이어 열기 위한 각 CLI의 대화 ID(Claude Code 세션 ID, Codex 스레드 ID). 대화 본문은 저장하지 않으며, 이어 열기는 각 CLI가 스스로 보관한 기록을 사용합니다.
+- 프로젝트별 활동 기록을 켠 경우: 프로젝트 폴더 경로와 날짜별 에이전트 응답 완료 횟수. 최대 366일간 로컬에 보관하며, 기록을 끄면 즉시 삭제합니다. 프롬프트·응답 내용·토큰 수는 포함하지 않습니다.
+
+과거 활동 가져오기를 직접 누르면 해당 프로젝트의 로컬 Claude Code·Codex 대화 기록(`~/.claude/projects`, `~/.codex/sessions`)에서 완료 시각만 읽어 날짜별 추정 횟수로 합칩니다. 대화 본문은 저장하지 않으며 서버로 전송하지 않습니다. 다시 가져와도 같은 기록을 중복 합산하지 않습니다.
 
 Claude 사용량 표시를 켠 경우에만 `~/Library/Application Support/NotchAgent/claude-rate-limits.json`에 5시간·주간 한도 사용률과 초기화 시각을 저장합니다. 이 기능을 끄면 파일을 삭제합니다.
 
 NotchAgent는 터미널 입력·출력 본문, 명령 기록, 대화 본문, API 키, 로그인 토큰을 저장하지 않습니다. 탭 제목은 위 세션 복원 정보에 포함됩니다.
 
-최근 활동은 에이전트 종류, 작업 제목, 폴더 이름, 이벤트, 시각, 읽음 상태를 최대 50개·24시간 동안 macOS 환경설정에 로컬로 보관합니다. 보관을 끄거나 목록을 비우면 저장본은 즉시 삭제됩니다. 종료·재실행 후 이전 세션 ID의 활동은 기록으로만 볼 수 있습니다. 알림 센터를 켜면 기본적으로 에이전트 종류와 이벤트만 macOS 로컬 알림으로 전달합니다. 작업 제목·폴더는 사용자가 알림 상세 내용 표시를 켠 경우에만 전달하며, 알림 기록은 macOS에서 관리합니다.
+최근 활동은 에이전트 종류, 작업 제목, 폴더 이름·전체 경로, 대화 ID(제공되는 경우), 이벤트, 시각, 읽음 상태를 최대 50개·24시간 동안 macOS 환경설정에 로컬로 보관합니다. 보관을 끄거나 목록을 비우면 저장본은 즉시 삭제됩니다. 프로젝트 경로와 대화 ID가 있는 Codex·Claude 활동은 종료·재실행 후에도 원래 대화를 이어 열 수 있습니다. 복원 정보가 없는 예전 기록은 다른 대화로 연결하지 않습니다. 알림 센터를 켜면 기본적으로 에이전트 종류와 이벤트만 macOS 로컬 알림으로 전달합니다. 작업 제목·폴더는 사용자가 알림 상세 내용 표시를 켠 경우에만 전달하며, 알림 기록은 macOS에서 관리합니다.
 
 파일 경로가 없는 이미지나 스크린샷을 끌어놓으면 macOS 임시 폴더 아래 `NotchAgent-Drops`에 파일을 받아 경로를 터미널에 입력합니다. Finder 파일은 복사하지 않고 원래 경로를 사용합니다. 임시 파일은 세션이 읽을 수 있도록 유지되며 macOS의 임시 파일 정리 대상입니다. 클립보드는 변경하지 않습니다.
 
 앱 데이터는 위 환경설정·지원 폴더와 임시 파일을 지워 제거할 수 있습니다. 이미 표시된 시스템 알림은 알림 센터에서 지울 수 있습니다.
 
 ## 사용자가 실행하는 프로그램
+
+임시 채팅은 macOS 임시 폴더의 `NotchAgent-Chats` 아래 개별 폴더에서 실행합니다. NotchAgent의 세션 복원·최근 활동 보관·프로젝트 활동 집계에는 포함하지 않으며, 앱이 열려 있는 동안 이벤트는 메모리에 표시될 수 있습니다. 임시 폴더의 생성 파일은 자동 삭제하지 않습니다. CLI 자체 대화 기록·네트워크 통신·파일 접근 권한은 기존과 같으므로 시크릿 모드나 보안 샌드박스가 아닙니다.
 
 터미널에서 실행한 셸과 CLI(Codex, Claude Code, Gemini CLI 등)는 사용자 계정 권한으로 동작합니다. 이들 프로그램의 네트워크 통신, 파일 접근, 기록 저장은 각 프로그램의 약관과 개인정보 처리방침을 따릅니다. NotchAgent는 이들의 승인·샌드박스 설정을 바꾸지 않습니다.
 
@@ -50,6 +55,12 @@ NotchAgent는 터미널 입력·출력 본문, 명령 기록, 대화 본문, API
 - **Claude Code**: 켠 경우에만 NotchAgent에서 여는 Claude Code 세션의 상태 표시줄 명령을 NotchAgent로 지정합니다. 전달되는 정보 중 한도 사용률과 초기화 시각만 위 파일에 저장하고, 나머지는 저장하지 않은 채 사용자가 원래 설정한 상태 표시줄 명령에 그대로 넘깁니다.
 
 NotchAgent는 키체인이나 로그인 정보를 읽지 않습니다. 두 기능 모두 설정에서 언제든 끌 수 있습니다.
+
+## GitHub 저장소 상태 (선택)
+
+로컬 폴더의 디스크 사용량도 읽습니다. `.git`·의존성·빌드 결과물을 포함하고 심볼릭 링크 대상은 따라가지 않습니다. 계산 결과는 메모리에 5분간 캐시하며 서버로 보내지 않습니다.
+
+로컬 브랜치·변경 파일 수·origin 주소를 읽어 홈에 표시합니다. PR·검사 연결을 켜면 설치된 GitHub CLI(gh)의 기존 인증으로 저장소·브랜치·커밋에 해당하는 PR과 검사 메타데이터를 GitHub에서 읽습니다. 앱은 로그인 절차를 실행하거나 토큰을 별도로 저장하지 않습니다. 조회 결과는 메모리에서만 유지하고, 명령 출력 임시 파일은 조회 후 삭제합니다. 저장소 변경·push·PR 작성·병합은 수행하지 않습니다. 설정에서 GitHub 조회를 끌 수 있습니다.
 
 ## git worktree
 
@@ -105,7 +116,11 @@ Only with Claude usage display on, the 5-hour and weekly usage percentages and r
 
 NotchAgent never stores terminal input/output bodies, command history, conversation bodies, API keys, or sign-in tokens. Tab titles are included in the restoration metadata above.
 
-Recent activity stores up to 50 events for 24 hours in local macOS preferences: agent, task title, folder name, event, time, and read state. Turning off retention or clearing the list immediately deletes the saved copy. After a relaunch, events for old session IDs are shown as history only. If Notification Center is enabled, only the agent and event are passed to macOS local notifications by default. Task title and folder are included only when you turn on notification details; macOS manages that notification history.
+Recent activity stores up to 50 events for 24 hours in local macOS preferences: agent, task title, folder name and full path, conversation ID when available, event, time, and read state. Turning off retention or clearing the list immediately deletes the saved copy. Codex and Claude events with a project path and conversation ID can reopen that same conversation after relaunch. Older events without restore details never fall back to a different conversation. If Notification Center is enabled, only the agent and event are passed to macOS local notifications by default. Task title and folder are included only when you turn on notification details; macOS manages that notification history.
+
+When project activity recording is enabled, NotchAgent also stores the project folder path and daily count of completed agent replies locally for up to 366 days. Turning recording off immediately deletes these counts. Prompts, replies, and token counts are not included.
+
+Only when you request a historical import, NotchAgent reads local Claude Code and Codex conversations under `~/.claude/projects` and `~/.codex/sessions` for the selected project. It merges completion dates into estimated daily counts without storing conversation bodies or sending them to a server. Re-importing does not add the same records twice.
 
 Dropped images or screenshots without an existing file path are received under `NotchAgent-Drops` in the macOS temporary directory, and their paths are inserted into the terminal. Finder files use their original paths and are not copied. Temporary files remain available for the CLI and are subject to macOS temporary-file cleanup. The clipboard is not changed.
 
@@ -130,6 +145,12 @@ These signals reach the app as local macOS notifications and never leave your Ma
 - **Claude Code**: when on, NotchAgent becomes the status line command for Claude Code sessions opened in NotchAgent. Only the usage percentages and reset times are stored (file above); the rest is passed unchanged to your own status line command without being stored.
 
 NotchAgent never reads the Keychain or sign-in data. Both features can be turned off in Settings at any time.
+
+## GitHub repository status (optional)
+
+Local disk usage includes `.git`, dependencies, and build output without following symlink targets. Size results are cached in memory for five minutes and not sent to a server. Temporary chats run in separate folders under the macOS temporary directory's `NotchAgent-Chats`. They are excluded from NotchAgent session restoration, saved recent activities, and project activity counts; events may be shown in memory while the app is open. Generated files are not automatically deleted. CLI history, network communication, and file permissions remain unchanged; this is not incognito mode or a security sandbox.
+
+Local branch, changed-file count, and origin are read for Home. Enabling PR and checks uses the installed GitHub CLI (gh) and its existing authentication to read metadata for the repository, branch, and commit from GitHub. The app does not initiate sign-in or separately store tokens. Results remain in memory; temporary command-output files are removed after each query. No repository changes, pushes, PR creation, or merging are performed. GitHub queries can be disabled in Settings.
 
 ## Git worktrees
 

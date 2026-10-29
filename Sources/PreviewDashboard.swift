@@ -1,5 +1,52 @@
 import SwiftUI
 
+/// Refreshes only the age label; terminal views do not redraw on its clock.
+struct UsageReadingStatus: View {
+    let agent: AgentKind
+    let snapshot: UsageSnapshot?
+    var loading = false
+    var error: String? = nil
+    var refresh: (() -> Void)? = nil
+    var concise = false
+    var iconOnly = false
+    @State private var showingDetails = false
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let stale = snapshot.map { UsageFreshness.isStale($0, agent: agent, now: context.date) } ?? false
+            let label = UsageFreshness.label(snapshot: snapshot, agent: agent, loading: loading, error: error, now: context.date)
+            let shortLabel = snapshot.map { (stale ? "! " : "") + UsageAge.label(since: $0.fetchedAt, now: context.date) }
+            Button { showingDetails.toggle() } label: {
+                if iconOnly {
+                    AgentLogo(kind: agent, size: 14)
+                        .overlay(alignment: .topTrailing) {
+                            if stale || error != nil { Circle().fill(.orange).frame(width: 4, height: 4) }
+                        }
+                } else {
+                    Text(concise && !loading && error == nil ? shortLabel ?? label : label).font(.system(size: 10)).lineLimit(1)
+                        .foregroundStyle(stale || error != nil ? Color.orange : Palette.muted)
+                }
+            }
+            .buttonStyle(.plain).help(label + L(" · 눌러서 자세히 보기", " · Click for details"))
+            .accessibilityLabel(agent.name + " · " + label)
+            .popover(isPresented: $showingDetails) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(agent.name + L(" 사용량", " usage")).font(.headline)
+                    if let snapshot {
+                        Text(L("마지막 갱신: ", "Last updated: ") + snapshot.fetchedAt.formatted(date: .abbreviated, time: .standard))
+                    }
+                    if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+                    if stale { Text(L("오래된 값입니다. 현재 남은 한도와 다를 수 있습니다.", "This reading is outdated and may differ from your current limit.")).foregroundStyle(.orange) }
+                    Text(agent == .claude ? ClaudeUsageService.refreshHelp : L("5분마다 조회합니다. 조회 실패 시 마지막 성공 값을 유지합니다.", "Checked every five minutes. The last successful reading is kept if a refresh fails."))
+                    if let refresh {
+                        Button(agent == .claude ? L("마지막 값 다시 읽기", "Re-read last value") : L("다시 조회", "Retry refresh"), action: refresh)
+                            .disabled(loading)
+                    }
+                }.font(.caption).padding(16).frame(width: 290, alignment: .leading)
+            }
+        }
+    }
+}
+
 struct FolderDropTarget: ViewModifier {
     let model: AppModel
     @State private var targeted = false
@@ -15,97 +62,12 @@ struct FolderDropTarget: ViewModifier {
     }
 }
 
-/// Compact usage for the preview: one line per agent with small bars; reset times and
-/// stale-reading details stay in tooltips.
+/// Kept as the preview entry point; rendering is shared with the workspace footer.
 struct PreviewUsageSummary: View {
     let codex: UsageService
     let claude: ClaudeUsageService
     var body: some View {
-        VStack(spacing: 8) {
-            if codex.enabled {
-                row(.codex, snapshot: codex.snapshot, tint: Palette.codex,
-                    placeholder: codex.isLoading ? L("확인 중", "Loading") : (codex.error ?? "—"),
-                    warning: codex.error ?? (codex.snapshot?.isStale == true ? L("마지막 조회 값 · 갱신 필요", "Last reading · refresh needed") : nil),
-                    carriesRefresh: true)
-            } else {
-                HStack(spacing: 8) {
-                    Button { codex.setEnabled(true) } label: {
-                        HStack(spacing: 6) {
-                            AgentLogo(kind: .codex, size: 13)
-                            Text(L("Codex 사용량 연결", "Connect Codex usage")).font(.caption)
-                        }
-                    }.buttonStyle(.plain).foregroundStyle(Palette.muted)
-                    Spacer(minLength: 0)
-                    if !claude.enabled { refresh }
-                }
-            }
-            if claude.enabled {
-                row(.claude, snapshot: claude.snapshot, tint: Palette.claude,
-                    placeholder: L("NotchAgent의 Claude 세션이 응답하면 표시됩니다", "Shows after a Claude session in NotchAgent replies"),
-                    warning: claude.snapshot.map { Date().timeIntervalSince($0.fetchedAt) > 3600 } == true
-                        ? L("마지막 수신 값 · 다음 응답 시 갱신", "Last reading · updates on next reply") : nil,
-                    carriesRefresh: !codex.enabled)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(Palette.surface).clipShape(.rect(cornerRadius: 10))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(L("남은 사용량", "Remaining usage"))
-    }
-    private var refresh: some View {
-        RefreshButton(help: L("사용량 새로고침 · 숫자는 남은 한도입니다", "Refresh usage · percentages show remaining quota")) {
-            if codex.enabled { codex.refresh() }
-            if claude.enabled { claude.reload() }
-        }.disabled(codex.isLoading)
-    }
-    private func row(_ kind: AgentKind, snapshot: UsageSnapshot?, tint: Color,
-                     placeholder: String, warning: String?, carriesRefresh: Bool) -> some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                AgentLogo(kind: kind, size: 13)
-                Text(kind == .claude ? "Claude" : "Codex").fontWeight(.medium)
-            }.frame(width: 70, alignment: .leading)
-            if let snapshot {
-                ForEach(snapshot.windows.prefix(2)) { window in
-                    HStack(spacing: 6) {
-                        Text(shortTitle(window)).foregroundStyle(Palette.muted).frame(width: 20, alignment: .leading)
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(Color.white.opacity(0.08))
-                                Capsule().fill(window.remaining <= 20 ? Palette.low : tint)
-                                    .frame(width: geo.size.width * window.remaining / 100)
-                                    .animation(Motion.snappy, value: window.remaining)
-                            }
-                        }.frame(height: 4)
-                        Text("\(Int(window.remaining))%").monospacedDigit()
-                            .foregroundStyle(window.remaining <= 20 ? Palette.low : Color.white)
-                            .frame(width: 34, alignment: .trailing)
-                            .contentTransition(.numericText(value: window.remaining))
-                            .animation(Motion.snappy, value: window.remaining)
-                    }
-                    .help(window.title + L(" 남음", " left") + " · " + window.resetLabel())
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(window.title + L(" \(Int(window.remaining))% 남음, ", " \(Int(window.remaining))% left, ") + window.resetLabel())
-                }
-            } else {
-                Text(placeholder).foregroundStyle(Palette.muted).lineLimit(1).help(warning ?? placeholder)
-                Spacer(minLength: 0)
-            }
-            Group {
-                if let warning, snapshot != nil {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(.orange).help(warning)
-                } else { Color.clear }
-            }.frame(width: 12)
-            // Keeps both rows' bars aligned whether or not this row carries the refresh button.
-            if carriesRefresh { refresh } else { Color.clear.frame(width: 18) }
-        }
-        .font(.system(size: 11))
-    }
-    private func shortTitle(_ window: UsageWindow) -> String {
-        guard let minutes = window.durationMinutes else { return window.id == "primary" ? "1" : "2" }
-        if minutes % 1440 == 0 { return "\(minutes / 1440)d" }
-        if minutes % 60 == 0 { return "\(minutes / 60)h" }
-        return "\(minutes)m"
+        CompactUsageFooter(codex: codex, claude: claude, stacked: true)
     }
 }
 
@@ -154,10 +116,10 @@ struct RecentActivitiesView: View {
         }
     }
     private func activityRow(_ activity: RecentActivity, now: Date) -> some View {
-        let available = model.sessions.contains { $0.id == activity.sessionID }
+        let available = model.sessions.contains { !$0.ended && $0.id == activity.sessionID }
+        let resumable = model.canResumeActivity(activity)
         return Button {
-            if available { model.openSession(id: activity.sessionID) }
-            else { model.markActivityRead(id: activity.id) }
+            model.openActivity(id: activity.id)
         } label: {
             HStack(spacing: 9) {
                 if activity.kind == .shell {
@@ -172,7 +134,7 @@ struct RecentActivitiesView: View {
                         .font(.caption2).foregroundStyle(Palette.muted).lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Text(available ? UsageAge.label(since: activity.date, now: now) : L("닫힌 세션", "Closed"))
+                Text(available ? UsageAge.label(since: activity.date, now: now) : resumable ? L("이어가기 ↗", "Resume ↗") : L("이전 기록", "Past event"))
                     .font(.caption2).foregroundStyle(Palette.muted).fixedSize()
                 Circle().fill(activity.isRead ? Color.clear : Palette.mint).frame(width: 5, height: 5)
             }
@@ -180,7 +142,7 @@ struct RecentActivitiesView: View {
             .background(activity.isRead ? Color.white.opacity(0.025) : Color.white.opacity(0.055))
             .clipShape(.rect(cornerRadius: 8)).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).opacity(available ? 1 : 0.7)
-        .help(available ? L("세션 열기", "Open session") : L("닫힌 세션의 기록 읽음 처리", "Mark this closed session's activity as read"))
+        .buttonStyle(.plain).opacity(available || resumable ? 1 : 0.7)
+        .help(available ? L("세션 열기", "Open session") : resumable ? L("같은 대화를 새 탭에서 이어가기", "Resume this conversation in a new tab") : L("대화 복원 정보가 없는 이전 기록", "This older event has no conversation restore details"))
     }
 }

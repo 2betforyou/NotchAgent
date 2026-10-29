@@ -4,7 +4,7 @@ import SwiftUI
 enum Palette {
     /// The accent the user picked (mint by default); the name is kept from the original design.
     static var mint: Color { Accent.current.color }
-    static let surface = Color(white: 0.065)
+    static let surface = Color(white: 0.03)
     static let muted = Color(white: 0.62)
     static let line = Color.white.opacity(0.09)
     // Each agent's brand color, used for its usage bars.
@@ -110,10 +110,13 @@ struct IslandView: View {
                         errorBanner(error).padding(.bottom, 10).transition(.move(edge: .top).combined(with: .opacity))
                     }
                     if model.phase == .preview { preview }
+                    else if model.showsInlineSettings {
+                        SettingsView(model: model, displayChanged: { model.layoutChanged?() })
+                    }
                     else { terminalPanel }
                 }
                 .padding(.horizontal, 26)
-                .padding(.bottom, 18)
+                .padding(.bottom, model.phase == .terminal ? 8 : 18)
                 // The preview is exactly as tall as its content (no dead space below the footer).
                 .fixedSize(horizontal: false, vertical: model.phase == .preview)
                 .background {
@@ -133,7 +136,7 @@ struct IslandView: View {
                     removal: .opacity.animation(.easeIn(duration: 0.1))))
             }
         }
-        .id("\(model.accent.rawValue)-\(model.language.rawValue)") // re-render every color and string
+        .id(model.language)
         .frame(width: width, height: height, alignment: .top)
         .motion(Motion.island, value: model.phase, reduce: reduceMotion)
         .motion(Motion.island, value: model.banner, reduce: reduceMotion)
@@ -141,7 +144,7 @@ struct IslandView: View {
         .motion(Motion.snappy, value: model.lastError, reduce: reduceMotion)
         .frame(width: model.panelWidth + 32, height: model.hostHeight + 32, alignment: .top)
         .foregroundStyle(.white)
-        .tint(Palette.mint)
+        .tint(model.accent.color)
         .preferredColorScheme(.dark)
     }
     private var compact: some View {
@@ -186,7 +189,14 @@ struct IslandView: View {
         case .usage(let items):
             if items.count > 1 { UsageBadge(usage: items[1], showsNumber: true) }
             else if let only = items.first { UsageBadge.percent(only) }
-        case .single: NotchStatusView(status: model.notchStatus)
+        case .single:
+            HStack(spacing: 4) {
+                NotchStatusView(status: model.closedWorkStatus)
+                if model.notchShowsWorkCount, model.workingNotchSessions.count > 1 {
+                    Text("\(model.workingNotchSessions.count)").font(.caption2.monospacedDigit())
+                        .accessibilityLabel(L("작업 중 \(model.workingNotchSessions.count)개", "\(model.workingNotchSessions.count) working"))
+                }
+            }
         case .multi(_, let right):
             HStack(spacing: 4) { ForEach(right, id: \.self) { id in ringedIcon(id) } }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
@@ -199,19 +209,24 @@ struct IslandView: View {
     }
     private func bannerRow(_ banner: NotchBanner) -> some View {
         Button { model.openBanner() } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 if banner.kind == .shell {
-                    Image(systemName: "terminal.fill").font(.caption).foregroundStyle(Palette.mint)
+                    Image(systemName: "terminal.fill").font(.subheadline).foregroundStyle(Palette.mint)
                 } else {
-                    AgentLogo(kind: banner.kind, size: 14)
+                    AgentLogo(kind: banner.kind, size: 17)
                 }
-                Text(banner.kind.name).font(.caption.weight(.semibold))
-                Text(banner.reason.message).font(.caption).foregroundStyle(Palette.color(for: banner.reason))
-                Spacer(minLength: 6)
-                Text(banner.folder).font(.caption2).foregroundStyle(Palette.muted).lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(banner.reason.message).font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("\(banner.kind.name) · \(banner.folder)")
+                        .font(.caption).foregroundStyle(Palette.muted).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right").font(.caption.weight(.semibold))
+                    .foregroundStyle(Palette.muted)
             }
-            .padding(.horizontal, 24)
-            .frame(height: 30, alignment: .top)
+            .padding(.horizontal, 22)
+            .frame(height: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -246,8 +261,15 @@ struct IslandView: View {
                 if model.phase == .preview {
                     Text(model.hotkey.label.uppercased()).font(.caption2.monospaced()).foregroundStyle(Palette.muted)
                 }
-                Button { model.showSettings?() } label: { Image(systemName: "gearshape") }
-                    .buttonStyle(QuietButton()).help(L("설정", "Settings")).accessibilityLabel(L("설정", "Settings"))
+                if model.showsInlineSettings {
+                    Button { model.showTerminal?() } label: {
+                        Label(L("작업으로 돌아가기", "Back to workspace"), systemImage: "arrow.left")
+                            .font(.caption)
+                    }.buttonStyle(QuietButton())
+                } else {
+                    Button { model.showSettings?() } label: { Image(systemName: "gearshape") }
+                        .buttonStyle(QuietButton()).help(L("설정", "Settings")).accessibilityLabel(L("설정", "Settings"))
+                }
                 if model.phase == .terminal {
                     Button { model.collapse?() } label: { Image(systemName: "chevron.up") }.buttonStyle(QuietButton())
                         .help(L("접기 · \(model.hotkey.label)", "Close · \(model.hotkey.label)")).accessibilityLabel(L("노치 접기", "Close notch"))
@@ -255,10 +277,11 @@ struct IslandView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(height: model.notchHeight)
+        .frame(height: max(32, model.notchHeight))
+        .padding(.top, 6)
     }
     private var preview: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.previewHeadline)
@@ -271,34 +294,38 @@ struct IslandView: View {
                     Label(model.visibleSessions.isEmpty ? L("시작하기", "Get Started") : L("터미널 열기", "Open Terminal"), systemImage: "arrow.up.right")
                 }.buttonStyle(MintButton())
             }
-            QuickPromptField(model: model)
-            PreviewUsageSummary(codex: model.usage, claude: model.claudeUsage)
-            RecentActivitiesView(model: model)
-            HStack(spacing: 8) {
-                ForEach(AgentKind.allCases) { kind in
-                    Button { model.launch(kind) } label: {
-                        HStack(spacing: 6) {
-                            if kind == .shell { Image(systemName: kind.symbol) } else { AgentLogo(kind: kind, size: 13) }
-                            Text(kind == .claude ? "Claude" : kind.name)
-                            Circle().fill(model.executable(for: kind) == nil ? Palette.muted : Palette.mint).frame(width: 4, height: 4)
-                        }
-                        .font(.caption.weight(.medium)).frame(maxWidth: .infinity)
-                    }.buttonStyle(QuietButton())
+            VStack(alignment: .leading, spacing: 7) {
+                Text(L("프로젝트", "Projects")).font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+                WorkspaceBar(model: model)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                Text(L("바로 시작", "Start here")).font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+                QuickPromptField(model: model)
+                HStack(spacing: 8) {
+                    ForEach(AgentKind.allCases) { kind in
+                        Button { model.launch(kind) } label: {
+                            HStack(spacing: 6) {
+                                if kind == .shell { Image(systemName: kind.symbol) } else { AgentLogo(kind: kind, size: 13) }
+                                Text(kind == .claude ? "Claude" : kind.name)
+                                Circle().fill(model.executable(for: kind) == nil ? Palette.muted : Palette.mint).frame(width: 4, height: 4)
+                            }
+                            .font(.caption.weight(.medium)).frame(maxWidth: .infinity)
+                        }.buttonStyle(QuietButton())
+                    }
                 }
             }
-            PreviewFolderFooter(model: model)
+            Divider().overlay(Palette.line)
+            RecentActivitiesView(model: model)
+            CompactUsageFooter(codex: model.usage, claude: model.claudeUsage, stacked: true)
         }
         .modifier(FolderDropTarget(model: model))
     }
     private var terminalPanel: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             // Folders get the full width below the menu bar band.
             WorkspaceBar(model: model)
-            if model.visibleSessions.isEmpty {
-                launchPad
-            } else {
-                tabs
-                if let session = model.selected {
+            tabs
+            if let session = model.selected, model.visibleSessions.contains(where: { $0.id == session.id }) {
                     ZStack(alignment: .bottom) {
                         EmbeddedTerminal(session: session, appearance: model.appearance)
                             .id(session.id)
@@ -318,24 +345,34 @@ struct IslandView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transaction { $0.animation = nil }
-                }
-            }
-            if model.claudeUsage.enabled {
-                CombinedUsageStrip(codex: model.usage, claude: model.claudeUsage)
             } else {
-                UsageStrip(service: model.usage, compact: true)
+                launchPad
             }
-            HStack {
-                Circle().fill(model.selected?.isRunning == true ? Palette.mint : Palette.muted).frame(width: 5, height: 5)
-                Text(model.selected?.isRunning == true ? L("세션 연결됨", "Session connected") : L("준비됨", "Ready"))
-                Spacer()
-                Text(L("Esc는 터미널로 전달됩니다", "Esc goes to the terminal")).foregroundStyle(Palette.muted)
-                Text(L("\(model.hotkey.label) 접기", "\(model.hotkey.label) to close")).foregroundStyle(Palette.mint)
-            }.font(.caption2)
+            CompactUsageFooter(codex: model.usage, claude: model.claudeUsage)
         }
     }
     private var tabs: some View {
         HStack(spacing: 10) {
+            Button { model.selectHome() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "house").foregroundStyle(model.selectedID == nil ? Palette.mint : Palette.muted)
+                    Text(L("홈", "Home")).fontWeight(.semibold)
+                }
+                .font(.caption).padding(.horizontal, 10).padding(.vertical, 8)
+                .background {
+                    if model.selectedID == nil {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.1))
+                            .matchedGeometryEffect(id: "selectedTab", in: tabHighlight)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L("현재 프로젝트 홈 · ⌘1", "Current project home · ⌘1"))
+            .accessibilityAddTraits(model.selectedID == nil ? .isSelected : [])
+            if !model.visibleSessions.isEmpty {
+                Rectangle().fill(Palette.line).frame(width: 1, height: 18)
+            }
             FadingHScroll(target: model.selectedID) {
                 HStack(spacing: 6) {
                     ForEach(model.visibleSessions) { session in
@@ -382,7 +419,7 @@ struct IslandView: View {
                 .motion(Motion.snappy, value: model.selectedID, reduce: reduceMotion)
                 .motion(Motion.snappy, value: model.visibleSessions.map(\.id), reduce: reduceMotion)
             }
-            newSessionButtons
+            if model.selectedID != nil { newSessionButtons }
         }.frame(height: 32)
     }
     /// New sessions in the current folder, right beside its tabs; one button folds them away.
@@ -421,13 +458,26 @@ struct IslandView: View {
         }
     }
     private var launchPad: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Spacer(minLength: 0)
-            VStack(alignment: .leading, spacing: 10) {
-                Text("A little space.\nFor your next big thing.")
-                    .font(.largeTitle.weight(.semibold)).tracking(-0.9)
-                Text(L("익숙한 CLI, 당신의 설정 그대로.\n작업 폴더를 고르고 에이전트를 시작하세요.", "The CLIs you know, with your own settings.\nPick a folder and start an agent."))
-                    .font(.subheadline).foregroundStyle(Palette.muted).lineSpacing(4)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 22) {
+                TimelineView(.periodic(from: .now, by: 3600)) { timeline in
+                    let copy = model.showsTemporaryChats
+                        ? (title: "A little room.\nFor a quick thought.", detail: L("프로젝트와 분리된 채팅. 앱 종료 후 복원되지 않습니다.\nCLI 자체 기록과 임시 파일은 남을 수 있습니다.", "A chat outside your projects. Not restored after quitting.\nThe CLI may retain history and temporary files."))
+                        : SessionHomeCopy.message(at: timeline.date)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(copy.title).font(.largeTitle.weight(.semibold)).tracking(-0.9)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(copy.detail).font(.subheadline).foregroundStyle(Palette.muted).lineSpacing(4)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if model.projectActivityEnabled && !model.showsTemporaryChats {
+                    ProjectActivityHeatmap(activity: model.projectActivity, path: model.workspacePath, now: Date(),
+                                           importing: model.projectImportRunning, onImport: { model.importPastActivity() })
+                        .frame(width: 290) // 12 square cells, 11 gaps, and the card's side padding.
+                }
+            }
+            if !model.showsTemporaryChats {
+                RepositoryStatusRow(service: model.repositoryStatus, path: model.workspacePath)
             }
             HStack(spacing: 10) {
                 ForEach(AgentKind.allCases) { kind in
@@ -454,8 +504,16 @@ struct IslandView: View {
                     }.buttonStyle(.plain)
                 }
             }
-            Spacer(minLength: 0)
-        }.padding(.horizontal, 14).frame(maxHeight: .infinity)
+        }.padding(.horizontal, 14).padding(.top, 16).padding(.bottom, 8)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .task(id: model.workspacePath + "-" + String(model.repositoryStatus.githubEnabled) + "-" + String(model.showsTemporaryChats)) {
+            guard !model.showsTemporaryChats else { return }
+            let path = model.workspacePath
+            repeat {
+                await model.repositoryStatus.refresh(path: path)
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            } while !Task.isCancelled
+        }
     }
 }
 
@@ -477,7 +535,8 @@ struct UsageStrip: View {
                 }
             } else if let snapshot = service.snapshot {
                 UsageWindowsRow(agent: showsAgent ? .codex : nil, tint: Palette.codex, snapshot: snapshot, compact: compact,
-                                warning: service.error != nil || snapshot.isStale ? L("마지막 성공한 조회 값입니다. ", "Last successful reading. ") + (service.error ?? L("갱신이 필요합니다.", "Needs a refresh.")) : nil) {
+                                warning: service.error != nil || snapshot.isStale ? L("마지막 성공한 조회 값입니다. ", "Last successful reading. ") + (service.error ?? L("갱신이 필요합니다.", "Needs a refresh.")) : nil,
+                                loading: service.isLoading, readingError: service.error, refresh: { service.refresh() }) {
                     refreshButton
                 }
             } else {
@@ -491,7 +550,8 @@ struct UsageStrip: View {
                 }
             }
         }
-        .padding(compact ? 10 : 14)
+        .padding(.horizontal, compact ? 10 : 14)
+        .padding(.vertical, compact ? 6 : 14)
         .background(Palette.surface)
         .clipShape(.rect(cornerRadius: compact ? 9 : 12))
     }
@@ -541,7 +601,8 @@ struct CombinedUsageStrip: View {
             RefreshButton(help: L("Codex 사용량을 다시 조회합니다. ", "Re-queries Codex usage. ") + ClaudeUsageService.refreshHelp) { codex.refresh(); claude.reload() }
                 .disabled(codex.isLoading)
         }
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(Palette.surface)
         .clipShape(.rect(cornerRadius: 9))
     }
@@ -549,7 +610,7 @@ struct CombinedUsageStrip: View {
         if let snapshot = codex.snapshot, codex.enabled {
             UsageWindowsRow(agent: .codex, tint: Palette.codex, snapshot: snapshot, compact: true,
                             warning: codex.error != nil || snapshot.isStale ? L("마지막 성공한 조회 값입니다. ", "Last successful reading. ") + (codex.error ?? L("갱신이 필요합니다.", "Needs a refresh.")) : nil,
-                            fills: false) { EmptyView() }
+                            loading: codex.isLoading, readingError: codex.error, refresh: { codex.refresh() }, fills: false) { EmptyView() }
         } else {
             HStack(spacing: 8) {
                 AgentBadge(kind: .codex, stacked: false)
@@ -567,7 +628,7 @@ struct CombinedUsageStrip: View {
             UsageWindowsRow(agent: .claude, tint: Palette.claude, snapshot: snapshot, compact: true,
                             warning: Date().timeIntervalSince(snapshot.fetchedAt) > 3600
                                 ? L("Claude 세션에서 마지막으로 받은 값입니다. 새 응답이 오면 갱신됩니다.", "Last value from a Claude session. Updates with the next response.") : nil,
-                            fills: false) { EmptyView() }
+                            refresh: { claude.reload() }, fills: false) { EmptyView() }
         } else {
             HStack(spacing: 8) {
                 AgentBadge(kind: .claude, stacked: false)
@@ -586,11 +647,17 @@ struct UsageWindowsRow<Trailing: View>: View {
     let snapshot: UsageSnapshot
     let compact: Bool
     let warning: String?
+    var loading = false
+    var readingError: String? = nil
+    var refresh: (() -> Void)? = nil
     var fills = true
     @ViewBuilder let trailing: () -> Trailing
     var body: some View {
         HStack(spacing: compact ? 22 : 16) {
-            if let agent { AgentBadge(kind: agent, stacked: !compact, updatedAt: updatedAt) }
+            VStack(alignment: .leading, spacing: 3) {
+                if let agent { AgentBadge(kind: agent, stacked: !compact, updatedAt: updatedAt) }
+                UsageReadingStatus(agent: agent ?? .codex, snapshot: snapshot, loading: loading, error: readingError, refresh: refresh)
+            }
             ForEach(snapshot.windows) { window in
                 if compact {
                     HStack(spacing: 7) {
@@ -686,8 +753,15 @@ struct WorkspaceBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let labels = Workspaces.labels(model.workspaces)
-        FadingHScroll(target: model.workspacePath) {
+        FadingHScroll(target: model.showsTemporaryChats ? "__temporary__" : model.workspacePath) {
             HStack(spacing: 4) {
+                if model.showsTemporaryChats || model.sessions.contains(where: \.isTemporary) {
+                    Button { model.selectTemporaryChats() } label: {
+                        Label(L("임시 채팅", "Temporary chats"), systemImage: "clock")
+                    }
+                    .buttonStyle(WorkspaceChipStyle(active: model.showsTemporaryChats, highlight: chipHighlight))
+                    .id("__temporary__")
+                }
                 ForEach(model.workspaces) { workspace in
                     chip(workspace, label: labels[workspace.path] ?? workspace.name).id(workspace.path)
                         .opacity(draggedFolder == workspace.path ? 0.55 : 1)
@@ -703,7 +777,7 @@ struct WorkspaceBar: View {
         }
     }
     private func chip(_ workspace: SavedWorkspace, label: String) -> some View {
-        let active = workspace.path == model.workspacePath
+        let active = workspace.path == model.workspacePath && !model.showsTemporaryChats
         let running = model.runningCount(in: workspace.path)
         let exists = workspace.exists
         let branch = Workspaces.gitBranch(at: workspace.path)
@@ -780,6 +854,14 @@ struct QuickPromptField: View {
                 }
             }
             Rectangle().fill(Palette.line).frame(width: 1, height: 16)
+            Button { model.quickChatIsTemporary.toggle() } label: {
+                Label(L("임시", "Temp"), systemImage: "clock")
+                    .font(.caption).foregroundStyle(model.quickChatIsTemporary ? Palette.mint : Palette.muted)
+                    .padding(5).background(model.quickChatIsTemporary ? Color.white.opacity(0.08) : .clear)
+                    .clipShape(.rect(cornerRadius: 6))
+            }.buttonStyle(.plain)
+                .accessibilityAddTraits(model.quickChatIsTemporary ? .isSelected : [])
+                .help(L("프로젝트와 분리된 임시 폴더에서 시작. 앱 복원·활동 보관 제외. CLI 자체 기록은 남을 수 있습니다.", "Start in a separate temporary folder. Not restored or saved in app activity. The CLI may retain its own history."))
             ZStack(alignment: .leading) {
                 TextField("", text: $text, prompt: Text(L("\(model.quickAgent.name)에게 바로 요청…", "Ask \(model.quickAgent.name)…")).foregroundStyle(Palette.muted))
                     .textFieldStyle(.plain)
@@ -840,12 +922,12 @@ struct NotchStatusView: View {
             case .lowQuota(let agent, let remaining):
                 ZStack {
                     Circle().stroke(Color.white.opacity(0.15), lineWidth: 2.2)
-                    Circle().trim(from: 0, to: remaining / 100).stroke(Palette.low, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    Circle().trim(from: 0, to: (100 - remaining) / 100).stroke(Palette.low, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
                 .frame(width: 13, height: 13)
-                .help(L("\(agent.name) 한도 \(Int(remaining))% 남음", "\(agent.name) limit: \(Int(remaining))% left"))
-                .accessibilityLabel(L("\(agent.name) 한도 \(Int(remaining))% 남음", "\(agent.name) limit: \(Int(remaining))% left"))
+                .help(L("\(agent.name) 한도 \(Int(100 - remaining))% 사용", "\(agent.name) limit: \(Int(100 - remaining))% used"))
+                .accessibilityLabel(L("\(agent.name) 한도 \(Int(100 - remaining))% 사용", "\(agent.name) limit: \(Int(100 - remaining))% used"))
             case .sessions:
                 Circle().fill(Palette.muted).frame(width: 6, height: 6).accessibilityLabel(L("대기 중", "Idle"))
             case .empty:
@@ -865,40 +947,39 @@ struct NotchStatusView: View {
     }
 }
 
-/// Idle notch: an agent's icon inside a ring filled to the weekly quota left, optionally with
-/// the 5-hour quota left as a number. The icon already names the agent, so ring and number are
-/// neutral white and each turns red on its own at 20% or less.
+/// Idle notch: weekly quota used in the ring, 5-hour quota used as a number.
+/// High consumption turns red, matching the preview and workspace footer.
 struct UsageBadge: View {
     let usage: IdleUsage
     let showsNumber: Bool
     private static func color(_ window: UsageWindow, normal: Color) -> Color {
         window.remaining <= NotchStatus.lowQuotaThreshold ? Palette.low : normal
     }
-    private static func left(_ window: UsageWindow) -> String {
-        window.title + L(" \(Int(window.remaining))% 남음", " \(Int(window.remaining))% left")
+    private static func used(_ window: UsageWindow) -> String {
+        window.title + L(" \(Int(window.consumed))% 사용", " \(Int(window.consumed))% used")
     }
     static func percent(_ usage: IdleUsage) -> some View {
-        Text("\(Int(usage.session.remaining))%").font(.caption.monospacedDigit().weight(.semibold))
+        Text("\(Int(usage.session.consumed))%").font(.caption.monospacedDigit().weight(.semibold))
             .foregroundStyle(color(usage.session, normal: .white))
-            .contentTransition(.numericText(value: usage.session.remaining))
-            .help(usage.agent.name + " · " + left(usage.session) + " · " + usage.session.resetLabel())
+            .contentTransition(.numericText(value: usage.session.consumed))
+            .help(usage.agent.name + " · " + used(usage.session) + " · " + usage.session.resetLabel())
     }
     var body: some View {
         HStack(spacing: 5) {
             ZStack {
                 Circle().stroke(Color.white.opacity(0.12), lineWidth: 2)
-                Circle().trim(from: 0, to: usage.weekly.remaining / 100)
+                Circle().trim(from: 0, to: usage.weekly.consumed / 100)
                     .stroke(Self.color(usage.weekly, normal: Color.white.opacity(0.9)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .animation(Motion.snappy, value: usage.weekly.remaining)
+                    .animation(Motion.snappy, value: usage.weekly.consumed)
                 SessionIcon(kind: usage.agent, size: 11)
             }
             .frame(width: 21, height: 21)
-            .help(usage.agent.name + " · " + Self.left(usage.weekly) + " · " + usage.weekly.resetLabel())
+            .help(usage.agent.name + " · " + Self.used(usage.weekly) + " · " + usage.weekly.resetLabel())
             if showsNumber { Self.percent(usage) }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(usage.agent.name + ", " + Self.left(usage.session) + ", " + Self.left(usage.weekly))
+        .accessibilityLabel(usage.agent.name + ", " + Self.used(usage.session) + ", " + Self.used(usage.weekly))
     }
 }
 

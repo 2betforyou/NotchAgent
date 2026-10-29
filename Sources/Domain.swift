@@ -44,6 +44,16 @@ enum FileDrop {
     }
 }
 
+enum TemporaryChat {
+    static func createDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotchAgent-Chats", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return directory
+    }
+}
+
 enum AgentKind: String, CaseIterable, Identifiable, Codable {
     case shell, codex, claude, gemini
     var id: String { rawValue }
@@ -70,8 +80,16 @@ enum ShellSafety {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "NotchAgent"
-        env["TERM_PROGRAM_VERSION"] = "0.1.0"
+        env["TERM_PROGRAM_VERSION"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.2"
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
+        return env
+    }
+    /// A GUI-launched PTY must not inherit color suppression from its launcher.
+    static func terminalEnvironment(inheriting environment: [String: String] = ShellSafety.environment()) -> [String: String] {
+        var env = environment
+        for key in ["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "NODE_DISABLE_COLORS"] {
+            env.removeValue(forKey: key)
+        }
         return env
     }
     static func executable(_ name: String, override: String = "") -> String? {
@@ -174,7 +192,7 @@ struct IdleUsage: Equatable {
 
 enum ClosedNotchLayout: Equatable {
     case idle
-    /// No sessions: each agent's remaining quota (Codex left, Claude right).
+    /// No working sessions: each agent's consumed quota (Claude left, Codex right).
     case usage([IdleUsage])
     case single(UUID)
     case multi(left: [UUID], right: [UUID])
@@ -301,11 +319,43 @@ struct RecentActivity: Identifiable, Codable, Equatable {
     let reason: AttentionReason
     let date: Date
     var isRead = false
+    var projectPath: String?
+    var conversationID: String?
+    var isTemporary: Bool?
 
     init(sessionID: UUID, kind: AgentKind, title: String, folder: String,
-         reason: AttentionReason, date: Date, id: UUID = UUID()) {
+         reason: AttentionReason, date: Date, id: UUID = UUID(), projectPath: String? = nil, conversationID: String? = nil) {
         self.id = id; self.sessionID = sessionID; self.kind = kind
         self.title = title; self.folder = folder; self.reason = reason; self.date = date
+        self.projectPath = projectPath; self.conversationID = conversationID
+    }
+}
+
+enum ActivityChannel: String, CaseIterable {
+    case notch, system, sound
+    var title: String {
+        switch self {
+        case .notch: L("노치", "Notch")
+        case .system: L("알림 센터", "Notification Center")
+        case .sound: L("소리", "Sound")
+        }
+    }
+    static func key(_ reason: AttentionReason, _ channel: Self) -> String {
+        (reason == .failed ? AttentionReason.exited : reason).rawValue + "." + channel.rawValue
+    }
+}
+
+enum UsageFreshness {
+    static func isStale(_ snapshot: UsageSnapshot, agent: AgentKind, now: Date) -> Bool {
+        now.timeIntervalSince(snapshot.fetchedAt) > (agent == .claude ? 3600 : 600)
+            || snapshot.windows.contains { $0.resetsAt.map { $0 <= now } == true }
+    }
+    static func label(snapshot: UsageSnapshot?, agent: AgentKind, loading: Bool, error: String?, now: Date) -> String {
+        if loading { return L("갱신 중…", "Updating…") }
+        if error != nil { return snapshot == nil ? L("조회 실패 · 다시 시도", "Unavailable · retry") : L("갱신 실패 · 마지막 값", "Refresh failed · last reading") }
+        guard let snapshot else { return agent == .claude ? L("첫 응답 대기", "Waiting for first reply") : L("조회 기록 없음", "No reading yet") }
+        let age = UsageAge.label(since: snapshot.fetchedAt, now: now)
+        return isStale(snapshot, agent: agent, now: now) ? L("오래된 값 · \(age)", "Outdated · \(age)") : L("갱신 \(age)", "Updated \(age)")
     }
 }
 
@@ -387,6 +437,7 @@ struct UsageWindow: Equatable, Identifiable {
     let durationMinutes: Int?
     let resetsAt: Date?
     var remaining: Double { min(100, max(0, 100 - usedPercent)) }
+    var consumed: Double { usedPercent.isFinite ? min(100, max(0, usedPercent)) : 0 }
     var title: String {
         guard let minutes = durationMinutes else { return id == "primary" ? L("현재 한도", "Current limit") : L("추가 한도", "Extra limit") }
         if minutes == 10080 { return L("주간 한도", "Weekly") }

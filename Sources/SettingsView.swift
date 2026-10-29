@@ -1,6 +1,56 @@
 import SwiftUI
 import ServiceManagement
 
+struct NotificationRoutingView: View {
+    @Bindable var model: AppModel
+    private let events: [AttentionReason] = [.finished, .bell, .exited]
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+            GridRow {
+                Text(L("이벤트", "Event"))
+                ForEach(ActivityChannel.allCases, id: \.rawValue) { channel in
+                    Text(channel.title).frame(maxWidth: .infinity)
+                }
+            }.font(.caption).foregroundStyle(.secondary)
+            ForEach(events, id: \.rawValue) { event in
+                GridRow {
+                    Text(event == .finished ? L("작업 완료", "Completed") : event == .bell ? L("확인 요청", "Needs input") : L("세션 종료·오류", "Ended / error"))
+                    ForEach(ActivityChannel.allCases, id: \.rawValue) { channel in
+                        Toggle(event.message + " · " + channel.title, isOn: $model[delivery: event, channel: channel])
+                            .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                            .accessibilityLabel(event.message + " · " + channel.title)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private enum SettingsPage: CaseIterable {
+    case general, notch, alerts, appearance, agents, about
+    var title: String {
+        switch self {
+        case .general: L("일반", "General")
+        case .notch: L("노치", "Notch")
+        case .alerts: L("알림", "Alerts")
+        case .appearance: L("모양", "Appearance")
+        case .agents: L("에이전트", "Agents")
+        case .about: L("정보", "About")
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .notch: "rectangle.topthird.inset.filled"
+        case .alerts: "bell"
+        case .appearance: "paintpalette"
+        case .agents: "terminal"
+        case .about: "info.circle"
+        }
+    }
+}
+
 struct SettingsView: View {
     @Bindable var model: AppModel
     let displayChanged: () -> Void
@@ -9,8 +59,15 @@ struct SettingsView: View {
     @AppStorage("geminiPath") private var geminiPath = ""
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
+    @State private var selectedPage: SettingsPage = .general
     var body: some View {
-        Form {
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle().fill(Palette.line).frame(width: 1)
+            Group {
+            switch selectedPage {
+            case .general:
+            Form {
             Section(L("일반", "General")) {
                 Picker(L("언어", "Language"), selection: $model.language) {
                     ForEach(AppLanguage.allCases) { Text($0.name).tag($0) }
@@ -30,7 +87,11 @@ struct SettingsView: View {
                 }
                 if let loginError { Text(loginError).font(.caption).foregroundStyle(.orange) }
             }
-            Section(L("노치", "Notch")) {
+            }
+            .formStyle(.grouped)
+            case .notch:
+            Form {
+            Section(L("화면", "Display")) {
                 LabeledContent(L("현재 위치", "Current display"), value: model.displayName)
                 Text(model.hasPhysicalNotch ? L("실제 카메라 노치 위치에 정렬됨 · 메뉴바 높이와 카메라 폭 자동 감지", "Aligned to the camera notch · menu bar height and camera width detected") : L("활성 화면에서 실제 노치를 감지하지 못했습니다. 맥북 내장 화면이 활성화되면 자동으로 노치로 이동합니다.", "No camera notch on the active display. NotchAgent moves to the notch when the built-in display is active."))
                     .font(.caption).foregroundStyle(model.hasPhysicalNotch ? Color.secondary : .orange)
@@ -38,35 +99,54 @@ struct SettingsView: View {
                     Text(L("내장 노치 화면 우선", "Built-in notch display first")).tag("builtin")
                     Text(L("열 때 마우스가 있는 화면", "Display with the pointer")).tag("pointer")
                 }.onChange(of: model.preferredDisplay) { _, _ in displayChanged() }
+            }
+            Section(L("열기와 접기", "Opening and closing")) {
                 Toggle(L("마우스를 올리면 미리보기", "Preview on hover"), isOn: $model.hoverEnabled)
                 Picker(L("호버 반응 속도", "Hover delay"), selection: $model.hoverSpeed) {
                     ForEach(HoverSpeed.allCases) { Text($0.label).tag($0) }
                 }.disabled(!model.hoverEnabled)
-                Toggle(L("세션이 쉬고 있을 때 노치에 사용량 표시", "Show usage in the notch while sessions are idle"), isOn: $model.quietNotchShowsUsage)
-                    .help(L("작업 중이거나 확인이 필요한 세션이 있으면 세션 상태가 먼저 표시됩니다.", "A session that is working or needs you is always shown first."))
-                Picker(L("큰 화면 크기", "Terminal size"), selection: $model.terminalSize) {
-                    ForEach(TerminalSize.allCases) { Text($0.name).tag($0) }
-                }
                 Toggle(L("다른 앱을 클릭하면 자동으로 접기", "Collapse when switching to another app"), isOn: $model.collapseOnDeactivate)
                 Text(L("접혀도 터미널과 에이전트는 계속 실행됩니다.", "Terminal and agent sessions keep running while collapsed."))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section(L("활동 알림", "Activity Notifications")) {
-                Toggle(L("작업 알림 표시", "Show activity notices"), isOn: $model.notifyEnabled)
-                Toggle(L("macOS 알림 센터에 표시", "Show in macOS Notification Center"), isOn: $model.systemNotificationsEnabled)
-                Toggle(L("짧은 알림 소리", "Play a short sound"), isOn: $model.activitySoundEnabled)
-                Toggle(L("확인 요청 알림", "Notify when input is needed"), isOn: $model.notifyForNeedsInput)
-                Toggle(L("작업 완료 알림", "Notify when work finishes"), isOn: $model.notifyForCompletion)
-                Toggle(L("세션 종료 알림", "Notify when a session ends"), isOn: $model.notifyForSessionEnd)
+            Section(L("표시 내용", "Content")) {
+                Picker(L("큰 화면 크기", "Terminal size"), selection: $model.terminalSize) {
+                    ForEach(TerminalSize.allCases) { Text($0.name).tag($0) }
+                }
+            }
+            Section(L("최소화 화면", "Collapsed notch")) {
+                Toggle(L("쉬는 동안 사용량 표시", "Show usage while idle"), isOn: $model.quietNotchShowsUsage)
+                Toggle(L("작업 중 표시", "Show ongoing work"), isOn: $model.notchShowsWorking)
+                Toggle(L("작업 중인 개수 표시", "Show working session count"), isOn: $model.notchShowsWorkCount)
+                    .disabled(!model.notchShowsWorking)
+                Text(L("작업 중이 아니면 사용량을 표시합니다. 완료·확인 요청의 표시 방식은 알림 페이지에서 선택하세요.", "Usage appears when no work is running. Choose completion and input request delivery on the Alerts page."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            }
+            .formStyle(.grouped)
+            case .alerts:
+            Form {
+            Section(L("이벤트별 알림", "Event delivery")) {
+                NotificationRoutingView(model: model)
+                Text(L("이벤트마다 받을 위치를 선택하세요. 노치 알림은 약 6초 뒤 사라집니다. 모든 알림을 꺼도 최근 활동에는 기록됩니다.", "Choose where each event appears. Notch notices disappear after about six seconds. Events still appear in Recent Activity when delivery is off."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section(L("알림 센터와 개인정보", "Notification Center and privacy")) {
                 Toggle(L("macOS 알림에 작업 제목·폴더 표시", "Show task title and folder in macOS notifications"), isOn: $model.showNotificationDetails)
                     .disabled(!model.systemNotificationsEnabled)
-                Toggle(L("최근 활동을 재실행 후에도 보관", "Keep recent activity after relaunch"), isOn: $model.keepRecentActivities)
                 if let message = model.notificationPermissionMessage, model.systemNotificationsEnabled {
                     Text(message).font(.caption).foregroundStyle(.orange)
                 }
-                Text(L("알림 종류 선택은 macOS 알림·소리에 적용됩니다. 최근 활동은 최대 50개를 기기에 24시간 저장하며, 보관을 끄면 저장본을 즉시 삭제합니다. 알림 센터·소리·상세 내용은 기본적으로 꺼져 있습니다.", "Event choices apply to macOS notifications and sounds. Up to 50 recent activities are stored locally for 24 hours; turning this off immediately deletes the saved copy. Notification Center, sound, and details are off by default."))
+            }
+            Section(L("최근 활동", "Recent activity")) {
+                Toggle(L("최근 활동을 재실행 후에도 보관", "Keep recent activity after relaunch"), isOn: $model.keepRecentActivities)
+                Text(L("최근 활동은 최대 50개를 기기에 24시간 저장합니다. 보관을 끄면 저장본을 삭제합니다. 알림 센터·소리·상세 내용은 기본 꺼짐입니다.", "Up to 50 events are stored locally for 24 hours. Disabling retention deletes the saved copy. Notification Center, sound, and details are off by default."))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            }
+            .formStyle(.grouped)
+            case .appearance:
+            Form {
             Section(L("모양", "Appearance")) {
                 Picker(L("강조색", "Accent color"), selection: $model.accent) {
                     ForEach(Accent.allCases) { accent in
@@ -85,9 +165,13 @@ struct SettingsView: View {
                     Text("\(Int(model.fontSize)) pt").monospacedDigit().frame(width: 44)
                 }
             }
+            }
+            .formStyle(.grouped)
+            case .agents:
+            Form {
             Section(L("세션", "Sessions")) {
                 Toggle(L("다시 열 때 세션 복원", "Restore sessions on relaunch"), isOn: $model.restoreSessions)
-                Text(L("앱을 다시 열면 열려 있던 탭을 복원하고, 탭을 열 때 시작합니다. Claude Code와 Codex는 그 폴더의 마지막 대화를 이어 엽니다.", "Reopens your tabs when NotchAgent starts; each starts when you open it. Claude Code and Codex continue the folder's latest conversation."))
+                Text(L("탭을 복원하고 열 때 시작합니다. Claude·Codex는 저장된 대화 ID가 있으면 같은 대화를 이어가고, 없으면 폴더의 마지막 대화로 이어질 수 있습니다. 미제출 입력과 실행 중인 프로세스는 복원하지 않습니다.", "Restores tabs and starts them when opened. Claude and Codex resume a saved conversation ID when available; otherwise they may continue the folder's latest conversation. Drafts and running processes aren't restored."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -97,8 +181,12 @@ struct SettingsView: View {
             } header: { Text(L("CLI 실행 파일", "CLI executables")) } footer: {
                 Text(L("비워두면 Homebrew와 일반 설치 경로에서 찾습니다. 설치와 로그인은 각 CLI에서 진행하세요. API 키를 NotchAgent에 입력하지 않습니다.", "Leave empty to search Homebrew and common install paths. Install and sign in with each CLI; never enter API keys into NotchAgent."))
             }
-            Section(L("사용량과 개인정보", "Usage & Privacy")) {
+            Section(L("사용량", "Usage")) {
                 Toggle(L("Codex 계정 사용량 조회", "Show Codex account usage"), isOn: Binding(get: { model.usage.enabled }, set: { model.usage.setEnabled($0) }))
+                if model.usage.enabled {
+                    UsageReadingStatus(agent: .codex, snapshot: model.usage.snapshot, loading: model.usage.isLoading,
+                                       error: model.usage.error, refresh: { model.usage.refresh() })
+                }
                 Text(L("기존 Codex CLI의 읽기 전용 계정 조회를 사용합니다. 5분마다 갱신하며, 구독 한도와 누적 토큰은 서로 다른 값입니다.", "Uses the Codex CLI's read-only account query, every 5 minutes. Subscription limits and lifetime tokens are different numbers."))
                     .font(.caption).foregroundStyle(.secondary)
                 if model.usage.enabled, let snapshot = model.usage.snapshot {
@@ -106,14 +194,39 @@ struct SettingsView: View {
                     if let tokens = snapshot.lifetimeTokens { LabeledContent(L("CLI가 보고한 누적 토큰", "Lifetime tokens reported by the CLI"), value: tokens.formatted()) }
                 }
                 Toggle(L("Claude 계정 사용량 표시", "Show Claude account usage"), isOn: Binding(get: { model.claudeUsage.enabled }, set: { model.claudeUsage.setEnabled($0) }))
+                if model.claudeUsage.enabled {
+                    UsageReadingStatus(agent: .claude, snapshot: model.claudeUsage.snapshot, refresh: { model.claudeUsage.reload() })
+                }
                 Text(L("NotchAgent에서 새로 여는 Claude Code 세션이 보고하는 5시간·주간 한도를 표시합니다(Pro/Max, 첫 응답 이후). 로그인 정보는 읽지 않으며, 기존 상태 표시줄 설정은 그대로 동작합니다.", "Shows the 5-hour and weekly limits reported by Claude Code sessions you open in NotchAgent (Pro/Max, after the first response). Sign-in data is never read, and your own status line keeps working."))
                     .font(.caption).foregroundStyle(.secondary)
                 if model.claudeUsage.enabled, let snapshot = model.claudeUsage.snapshot {
                     LabeledContent(L("Claude 마지막 갱신", "Claude last updated"), value: snapshot.fetchedAt.formatted(date: .abbreviated, time: .shortened))
                 }
+            }
+            Section(L("프로젝트 활동", "Project activity")) {
+                Toggle(L("GitHub PR·검사 상태 조회", "Show GitHub PR and check status"), isOn: Binding(get: { model.repositoryStatus.githubEnabled }, set: { model.repositoryStatus.githubEnabled = $0 }))
+                Text(L("홈에서 현재 브랜치의 열린 PR과 검사를 조회합니다. 설치된 gh의 기존 로그인을 사용하며, 저장소를 변경하지 않습니다.", "Reads the current branch's open PR and checks on Home using your existing gh sign-in. Does not modify repositories."))
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle(L("프로젝트별 에이전트 응답 기록", "Record agent replies by project"), isOn: $model.projectActivityEnabled)
+                Button {
+                    model.importPastActivity()
+                } label: {
+                    Label(L("현재 프로젝트의 과거 대화 가져오기", "Import past conversations for this project"), systemImage: "arrow.down.to.line")
+                }
+                .disabled(!model.projectActivityEnabled || model.projectImportRunning)
+                if model.projectImportRunning { ProgressView(L("로컬 대화를 확인하는 중…", "Checking local conversations…")) }
+                if let message = model.projectImportMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+                Text(L("Codex·Claude의 로컬 완료 기록을 읽어 날짜별 횟수만 저장합니다. 과거 기록은 추정치이며, 프롬프트·출력·토큰은 저장하지 않습니다. 기록을 끄면 가져온 횟수도 즉시 삭제합니다.", "Reads local Codex and Claude completion records and saves daily counts only. Past counts are estimates; prompts, output and tokens are not stored. Turning recording off also deletes imported counts."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section(L("개인정보", "Privacy")) {
                 Text(L("터미널 내용·API 키는 저장하거나 별도 서버로 전송하지 않습니다. 실행한 CLI 자체의 네트워크·파일 접근은 해당 CLI의 정책을 따릅니다.", "Terminal content and API keys are never stored or sent anywhere. Network and file access by the CLIs you run follows their own policies."))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            }
+            .formStyle(.grouped)
+            case .about:
+            Form {
             Section(L("앱", "Application")) {
                 Button(role: .destructive) { NSApp.terminate(nil) } label: {
                     Label(L("앱 종료", "Quit App"), systemImage: "power")
@@ -123,9 +236,41 @@ struct SettingsView: View {
             }
             Text("NotchAgent \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · SwiftTerm (MIT)")
                 .font(.caption2).foregroundStyle(.secondary)
+            }
+            .formStyle(.grouped)
+            }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scrollContentBackground(.hidden)
         }
-        .formStyle(.grouped).frame(width: 590, height: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black).foregroundStyle(.white).tint(Palette.mint).preferredColorScheme(.dark)
         .id(model.language) // subviews such as the shortcut recorder re-render in the new language
+    }
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label { Text(L("설정", "Settings")) } icon: { Image(systemName: "gearshape").foregroundStyle(Palette.mint) }
+                .font(.headline).padding(.horizontal, 12).padding(.bottom, 15)
+            ForEach(SettingsPage.allCases, id: \.self) { page in
+                Button { selectedPage = page } label: {
+                    Label(page.title, systemImage: page.symbol)
+                        .font(.subheadline.weight(selectedPage == page ? .semibold : .regular))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 11).padding(.vertical, 8)
+                        .foregroundStyle(selectedPage == page ? Color.white : Palette.muted)
+                        .background(selectedPage == page ? Color.white.opacity(0.08) : Color.clear)
+                        .clipShape(.rect(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedPage == page ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(width: 176)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(Palette.surface)
     }
     /// Menus show images, not SwiftUI views; a small color dot per accent.
     static func swatch(_ color: NSColor) -> NSImage {

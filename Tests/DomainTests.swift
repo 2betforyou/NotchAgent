@@ -8,6 +8,14 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(ShellSafety.quote("a'b;$(id)"), "'a'\\''b;$(id)'")
         XCTAssertEqual(ShellSafety.quote(""), "''")
     }
+    func testTerminalDoesNotInheritLauncherColorOverrides() {
+        let inherited = ["NO_COLOR": "1", "FORCE_COLOR": "0", "CLICOLOR": "0",
+                         "CLICOLOR_FORCE": "0", "NODE_DISABLE_COLORS": "1",
+                         "TERM": "xterm-256color", "COLORTERM": "truecolor", "PATH": "/usr/bin"]
+        let terminal = ShellSafety.terminalEnvironment(inheriting: inherited)
+        XCTAssertEqual(terminal, ["TERM": "xterm-256color", "COLORTERM": "truecolor", "PATH": "/usr/bin"])
+        XCTAssertEqual(inherited["NO_COLOR"], "1")
+    }
     func testShellQuoteRoundTripDoesNotExecuteMetacharacters() throws {
         let values = ["a'b;$(id)", "space path", "줄\n바꿈", "`echo injected`", ""]
         for value in values {
@@ -43,6 +51,9 @@ final class DomainTests: XCTestCase {
     func testClampAndResetLabels() {
         let now = Date(timeIntervalSince1970: 1000)
         XCTAssertEqual(UsageWindow(id: "primary", usedPercent: 120, durationMinutes: nil, resetsAt: now).remaining, 0)
+        for (raw, expected) in [(0.0, 0.0), (24, 24), (85, 85), (100, 100), (120, 100), (-10, 0), (.nan, 0), (.infinity, 0)] {
+            XCTAssertEqual(UsageWindow(id: "primary", usedPercent: raw, durationMinutes: 300, resetsAt: nil).consumed, expected)
+        }
         XCTAssertEqual(UsageWindow(id: "primary", usedPercent: -10, durationMinutes: nil, resetsAt: nil).remaining, 100)
         XCTAssertEqual(UsageWindow(id: "secondary", usedPercent: 0, durationMinutes: 10080, resetsAt: now.addingTimeInterval(3660)).resetLabel(now: now), "1시간 1분 후 초기화")
     }
